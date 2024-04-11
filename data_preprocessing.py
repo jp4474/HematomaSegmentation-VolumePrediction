@@ -29,21 +29,32 @@ def genereate_npy(data_root_folder, folder = ''):
         single_image_array = single_image_array.astype(np.int16)
         single_image_array = np.expand_dims(single_image_array, axis=0)
         single_image_array = single_image_array.astype(np.int16)
-        
+        # check: xy should be 240x240
+        #print(single_image_array.shape)
+        assert single_image_array.shape[1]==240, 'Dimension mismatch'
+        assert single_image_array.shape[2]==240, 'Dimension mismatch'
+
         single_mask_path = os.path.join(masks_dir, mask_file_name)
         single_mask_nii = nib.load(single_mask_path)
         single_mask_array = single_mask_nii.get_fdata()
         single_mask_array = single_mask_array.astype(np.int16)
         single_mask_array = np.expand_dims(single_mask_array, axis=0)
         single_mask_array = single_mask_array.astype(np.int16)
-        
+        # check: xy should be 240x240
+        #print(single_mask_array.shape)
+        assert single_mask_array.shape[1]==240, 'Dimension mismatch'
+        assert single_mask_array.shape[2]==240, 'Dimension mismatch'
+
         # get the last dimension size
-        last_dim_size = single_image_array.shape[-1]
-        
-        assert last_dim_size==155, "Dimension mismatch"
+        last_dim_size_img = single_image_array.shape[-1]
+        last_dim_size_mask = single_mask_array.shape[-1]
+
+        assert last_dim_size_img==155, "Dimension mismatch"
+        assert last_dim_size_mask==155, 'Dimension mismatch'
+        # check dimension size of the mask
 
         # iterate over the last dimension
-        for i in range(last_dim_size):
+        for i in range(last_dim_size_img):
             # get the slice
             
             img_slice_array = single_image_array[..., i]
@@ -51,9 +62,15 @@ def genereate_npy(data_root_folder, folder = ''):
             img_slice_array = cv2.normalize(img_slice_array, None, 0, 1, cv2.NORM_MINMAX)
             mask_slice_array[mask_slice_array > 0.0] = 1.0
             mask_slice_array[mask_slice_array == 0.0] = 0.0
-            stacked_array = np.dstack((img_slice_array, mask_slice_array))
+            #print(img_slice_array.shape)
+            #print(mask_slice_array.shape)
+            stacked_array = np.vstack((img_slice_array, mask_slice_array))
+            #print(stacked_array[0,:,:].shape)
+            assert np.all(img_slice_array == np.expand_dims(stacked_array[0, :,:], axis = 0)), "Error 1"
+            assert np.all(mask_slice_array == np.expand_dims(stacked_array[1, :, :], axis = 0)), 'Error 2'
             # save the slice as a .npy file
             np.save(os.path.join(folder, 'slice', f'{file_id}_slice_{i}.npy'), stacked_array)
+        
 
 
 if __name__ == "__main__":
