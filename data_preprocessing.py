@@ -59,9 +59,9 @@ def genereate_npy(data_root_folder, folder = ''):
             
             img_slice_array = single_image_array[..., i]
             mask_slice_array = single_mask_array[..., i]
-            img_slice_array = cv2.normalize(img_slice_array, None, 0, 1, cv2.NORM_MINMAX)
-            mask_slice_array[mask_slice_array > 0.0] = 1.0
-            mask_slice_array[mask_slice_array == 0.0] = 0.0
+            #img_slice_array = cv2.normalize(img_slice_array, None, 0, 1, cv2.NORM_MINMAX)
+            #mask_slice_array[mask_slice_array > 0.0] = 1.0
+            #mask_slice_array[mask_slice_array == 0.0] = 0.0
             #print(img_slice_array.shape)
             #print(mask_slice_array.shape)
             stacked_array = np.vstack((img_slice_array, mask_slice_array))
@@ -119,9 +119,9 @@ def generate_npy_for_medsam(data_root_folder, folder = ''):
             
             img_slice_array = single_image_array[..., i]
             mask_slice_array = single_mask_array[..., i]
-            img_slice_array = cv2.normalize(img_slice_array, None, 0, 1, cv2.NORM_MINMAX)
-            mask_slice_array[mask_slice_array > 0.0] = 1.0
-            mask_slice_array[mask_slice_array == 0.0] = 0.0
+            #img_slice_array = cv2.normalize(img_slice_array, None, 0, 1, cv2.NORM_MINMAX)
+            #mask_slice_array[mask_slice_array > 0.0] = 1.0
+            #mask_slice_array[mask_slice_array == 0.0] = 0.0
             if np.sum(mask_slice_array) <= 0:
                 continue
             #print(img_slice_array.shape)
