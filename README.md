@@ -1,35 +1,30 @@
 # HematomaSegmentation-VolumePrediction
 
-# Folder Structure and Description
+## Preprocessing
+Run the pre-processing script to convert the dataset (nii.gz files and npy files) to npz format:
+
 ```bash
-.
-├── full_raw
-│   ├── training
-│   │   ├── mri
-│   │   ├── mask
-│   │   └── slice
-│   ├── validation
-│   │   ├── mri
-│   │   ├── mask
-│   │   └── slice
-│   └── test
-│       └── slice
-└── full_preprocessed
-    ├── training
-    │   ├── mri
-    │   ├── mask
-    │   └── slice
-    ├── validation
-    │   ├── mri
-    │   ├── mask
-    │   └── slice
-    └── test
-        ├── mri
-        ├── mask
-        └── slice
+python3 pre_CT_MR.py \
+    -img_path 230620_6L_64C_GN/data/img_train_val_test\
+    -img_name_suffix .nii.gz \
+    -gt_path 230620_6L_64C_GN/data/mask_train_val_test\
+    -gt_name_suffix .npy \
+    -output_path 230620_6L_64C_GN/data \
+    -num_workers 4 \
+    -modality CT \
+    -anatomy Brain \
+    -window_level 40 \
+    -window_width 400 \
+    --save_nii
 ```
-- mri: This folder contains MRI (Magnetic Resonance Imaging) scans. Each file in this folder represents a brain MRI scan of an individual.
+Convert npz to npy
 
-- mask: This folder contains mask data. In the context of medical imaging, a mask is often a binary image that indicates the regions of interest in the corresponding MRI scan. Each file in this folder represents a mask that corresponds to an MRI scan with the same name without the subscript 'seg'.
-
-- slice: This folder contains .npy files, which are NumPy array files. Each file in this folder is a stacked slice of an MRI scan and its corresponding mask. The MRI scan and mask are sliced into 155 slices along the transverse axis (the z-axis), and these slices are stacked together to form a 3D array of size [2, 240, 240]. This array is then saved as a .npy file. Each .npy file in this folder represents the sliced, stacked data of an MRI scan and its corresponding mask.
+```bash
+python3 npz_to_npy.py \
+    -npz_dir 230620_6L_64C_GN/data/MedSAM_train \
+    -npy_dir 230620_6L_64C_GN/data/npy \
+    -num_workers 4
+```
+# TODO:
+- find window_level, window_width
+- modify npydataset class
