@@ -9,8 +9,6 @@ import seaborn as sns
 import cv2
 import nibabel as nib
 
-
-
 def genereate_npy(data_root_folder, folder = ''):
     folder = os.path.join(data_root_folder, folder)
     imgs_dir = os.path.join(folder, 'mri')
