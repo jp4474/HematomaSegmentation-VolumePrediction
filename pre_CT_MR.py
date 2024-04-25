@@ -53,8 +53,9 @@ gt_path = args.gt_path  # path to the ground truth
 output_path = args.output_path  # path to save the preprocessed files
 npz_tr_path = join(output_path, "MedSAM_train", prefix[:-1])
 os.makedirs(npz_tr_path, exist_ok=True)
-npz_ts_path = join(output_path, "MedSAM_test", prefix[:-1])
-os.makedirs(npz_ts_path, exist_ok=True)
+
+# npz_ts_path = join(output_path, "MedSAM_test", prefix[:-1])
+# os.makedirs(npz_ts_path, exist_ok=True)
 
 num_workers = args.num_workers
 
@@ -115,19 +116,21 @@ def preprocess(name, npz_path):
             tumor_inst[tumor_inst > 0] + np.max(gt_data_ori) + 1
         )
 
-    # exclude the objects with less than 1000 pixels in 3D
-    gt_data_ori = cc3d.dust(
-        gt_data_ori, threshold=voxel_num_thre3d, connectivity=26, in_place=True
-    )
-    # remove small objects with less than 100 pixels in 2D slices
+    # # exclude the objects with less than 1000 pixels in 3D
+    # gt_data_ori = cc3d.dust(
+    #     gt_data_ori, threshold=voxel_num_thre3d, connectivity=26, in_place=True
+    # )
 
-    for slice_i in range(gt_data_ori.shape[0]):
-        gt_i = gt_data_ori[slice_i, :, :]
-        # remove small objects with less than 100 pixels
-        # reason: fro such small objects, the main challenge is detection rather than segmentation
-        gt_data_ori[slice_i, :, :] = cc3d.dust(
-            gt_i, threshold=voxel_num_thre2d, connectivity=8, in_place=True
-        )
+    # # remove small objects with less than 100 pixels in 2D slices
+
+    # for slice_i in range(gt_data_ori.shape[0]):
+    #     gt_i = gt_data_ori[slice_i, :, :]
+    #     # remove small objects with less than 100 pixels
+    #     # reason: fro such small objects, the main challenge is detection rather than segmentation
+    #     gt_data_ori[slice_i, :, :] = cc3d.dust(
+    #         gt_i, threshold=voxel_num_thre2d, connectivity=8, in_place=True
+    #     )
+
     # find non-zero slices
     z_index, _, _ = np.where(gt_data_ori > 0)
     z_index = np.unique(z_index)
@@ -140,14 +143,10 @@ def preprocess(name, npz_path):
         image_data = sitk.GetArrayFromImage(img_sitk)
         # nii preprocess start
         if modality == "CT":
-            lower_bound = WINDOW_LEVEL - WINDOW_WIDTH / 2
+            lower_bound = WINDOW_LEVEL - WINDOW_WIDTH / 2 # 65, 70
             upper_bound = WINDOW_LEVEL + WINDOW_WIDTH / 2
-            image_data_pre = np.clip(image_data, lower_bound, upper_bound)
-            image_data_pre = (
-                (image_data_pre - np.min(image_data_pre))
-                / (np.max(image_data_pre) - np.min(image_data_pre))
-                * 255.0
-            )
+            image_data_pre = np.clip(image_data, lower_bound, upper_bound)  # transfroms np.min = lowerbound
+            image_data_pre = (image_data_pre - lower_bound) / (upper_bound - lower_bound)
         else:
             lower_bound, upper_bound = np.percentile(
                 image_data[image_data > 0], 0.5
@@ -182,17 +181,17 @@ def preprocess(name, npz_path):
 
 if __name__ == "__main__":
     tr_names = names[:40]
-    ts_names = names[40:]
+    # ts_names = names[40:]
 
     preprocess_tr = partial(preprocess, npz_path=npz_tr_path)
-    preprocess_ts = partial(preprocess, npz_path=npz_ts_path)
+    # preprocess_ts = partial(preprocess, npz_path=npz_ts_path)
 
     with mp.Pool(num_workers) as p:
         with tqdm(total=len(tr_names)) as pbar:
             pbar.set_description("Preprocessing training data")
             for i, _ in tqdm(enumerate(p.imap_unordered(preprocess_tr, tr_names))):
                 pbar.update()
-        with tqdm(total=len(ts_names)) as pbar:
-            pbar.set_description("Preprocessing testing data")
-            for i, _ in tqdm(enumerate(p.imap_unordered(preprocess_ts, ts_names))):
-                pbar.update()
+        # with tqdm(total=len(ts_names)) as pbar:
+        #     pbar.set_description("Preprocessing testing data")
+        #     for i, _ in tqdm(enumerate(p.imap_unordered(preprocess_ts, ts_names))):
+        #         pbar.update()

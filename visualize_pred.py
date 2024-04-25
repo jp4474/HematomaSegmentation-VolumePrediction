@@ -5,9 +5,12 @@ from torch.utils.data import Dataset, TensorDataset, DataLoader, random_split
 from transformers import SamModel, SamProcessor
 import torch.nn.functional as F
 import os
+import math
+import nibabel as nib
 from torchmetrics.classification import BinaryJaccardIndex, Dice, JaccardIndex
 from transformers import AutoConfig
 from peft import LoftQConfig, LoraConfig, get_peft_model
+from medsam_train_native import npyDataset
 
 def dice_coeff_binary(y_pred, y_true):
     """Values must be only zero or one."""
@@ -15,7 +18,6 @@ def dice_coeff_binary(y_pred, y_true):
     inter = torch.dot(y_pred.view(-1).float(), y_true.view(-1).float())
     union = y_pred.float().sum() + y_true.float().sum()
     return ((2 * inter.float() + eps) / (union.float() + eps))
-
 
 def visualize_pred(img, mask, pred):
     # Flatten the mask and prediction arrays for score calculations
@@ -33,120 +35,44 @@ def visualize_pred(img, mask, pred):
     ax[2].imshow(pred)
     ax[2].set_title(f"Prediction\nDice: {dice_score:.2f} Jaccard: {jaccard_score:.2f}")
     plt.show()
-
-class BraTSDataset(Dataset):    
-    def __init__(self, data_root_folder, folder = '', n_sample=None):
-        main_folder = os.path.join(data_root_folder, folder)
-        self.folder_path = os.path.join(main_folder, 'slice')
-        self.file_names = [f for f in os.listdir(self.folder_path) if f.endswith('.npy')]
-        #self.file_names = sorted(os.listdir(self.folder_path))[:n_sample]
-
-
-    def __getitem__(self, index):
-        file_name = self.file_names[index]
-        sample = np.load(os.path.join(self.folder_path, file_name), allow_pickle=True)
-        #eps = 0.0001
-        img = sample[0,:,:]
-        #img = img.resize((256, 256)) 
-        diff = np.subtract(img.max(), img.min(), dtype=np.float64)
-        denom = np.clip(diff, a_min=1e-8, a_max=None)
-        img = (img - img.min()) / denom
-        mask = sample[1, :, :]
-        #mask= mask.resize((256, 256)) 
-        mask[mask > 0] = 1
-        mask[mask == 0] = 0
-        
-        gt2D = np.uint8(
-            mask == 1
-        )
-
-        y_indices, x_indices = np.where(gt2D > 0)  #
-        x_min, x_max = np.min(x_indices), np.max(x_indices)
-        y_min, y_max = np.min(y_indices), np.max(y_indices)
-        H, W = gt2D.shape
-        x_min = max(0, x_min) #- random.randint(0, self.bbox_shift))
-        x_max = min(W, x_max) #+ random.randint(0, self.bbox_shift))
-        y_min = max(0, y_min) #- random.randint(0, self.bbox_shift))
-        y_max = min(H, y_max) #+ random.randint(0, self.bbox_shift))
-        
-        bboxes = np.array([x_min, y_min, x_max, y_max])
-        
-        img_as_tensor = np.expand_dims(img, axis=0)
-        img_as_tensor = np.repeat(img_as_tensor, 3, axis=0)
-
-        mask_as_tensor = np.expand_dims(mask, axis=0)
-        bboxes_as_tensor = np.expand_dims(bboxes, axis=0)
-
-        img_as_tensor = torch.from_numpy(img_as_tensor)
-        mask_as_tensor = torch.from_numpy(mask_as_tensor)
-        bboxes_as_tensor = torch.from_numpy(bboxes_as_tensor)
-        
-        #return img_as_tensor, mask_as_tensor
-        return {
-            'image': img_as_tensor.to(dtype=torch.float32),
-            'mask': mask_as_tensor.to(dtype=torch.int64),
-            'box' : bboxes_as_tensor.to(dtype=torch.float32),
-            'img_id': file_name
-        }
-        
-    def __len__(self):
-        return len(self.file_names)
     
 
 if __name__ == "__main__":
-    # img = np.random.rand(256, 256)
-    # mask = np.random.rand(256, 256)
-    # pred = np.random.rand(256, 256)
-    # visualize_pred(img, mask, pred)
+    # Load the image
+    img = nib.load("/Users/lakon/Desktop/Columbia/HematomaSegmentation-VolumePrediction/data/img_test/38_2.nii.gz")
 
-    # model = MyModel()
+    # Convert the image data to numpy array
+    img_data = img.get_fdata()
 
-    # # Load the state dictionary
-    # model.load_state_dict(torch.load('path_to_your_model.pth'))
-    
-    # model = torch.load("/Users/jun/Desktop/Personal/BMENE/checkpoints/medsam_epoch_009.pth")
-    # model.eval()
+    # Find the first and last non-empty slices
+    first_slice = 0
+    last_slice = img_data.shape[2] - 1
 
-    processor = SamProcessor.from_pretrained("wanglab/medsam-vit-base") #.to(device)
-    config = AutoConfig.from_pretrained("wanglab/medsam-vit-base")
-    model = SamModel(config)
+    while np.all(img_data[:, :, first_slice] == 0):
+        first_slice += 1
 
-    peft_config = LoraConfig(
-        r=16,
-        lora_alpha=32,
-        lora_dropout=0.1,
-        bias="lora_only",
-        target_modules=["qkv", "q_proj", "v_proj"],
-    )
+    while np.all(img_data[:, :, last_slice] == 0):
+        last_slice -= 1
 
-    model = get_peft_model(model, peft_config)
+    # Calculate the number of plot rows and columns
+    num_slices = last_slice - first_slice + 1
+    num_cols = round(math.sqrt(num_slices))
+    num_rows = num_cols if num_slices % num_cols == 0 else num_cols + 1
 
-    model.load_state_dict(torch.load("/Users/jun/Desktop/BMENE/checkpoints/medsam_epoch_009.pth"))
-    model.eval()
+    # Create a figure for the plots
+    fig, ax = plt.subplots(num_rows, num_cols, figsize=(15, 15))
 
-    data_root_folder = '/Users/jun/Desktop/BMENE/medsam_local/'
-    dataset = BraTSDataset(data_root_folder, 'test')
-    dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
+    # Plot all slices
+    for i in range(first_slice, last_slice + 1):
+        row = (i - first_slice) // num_cols
+        col = (i - first_slice) % num_cols
+        ax[row, col].imshow(np.rot90(img_data[:, :, i]), cmap="gray")
+        ax[row, col].set_title(f"Slice {i}")
 
-    for i, data in enumerate(dataloader):
-        img = data['image']
-        mask = data['mask']
-        box = data['box']
+    # Remove empty subplots
+    if num_slices % num_cols != 0:
+        for j in range(num_slices, num_rows * num_cols):
+            fig.delaxes(ax.flatten()[j])
 
-        with torch.no_grad():
-            inputs = processor(img, input_boxes=box, do_normalize = False, do_rescale = False, return_tensors="pt")
-            outputs = model(**inputs, multimask_output=False)        
-            
-            medsam_seg_prob = torch.sigmoid(outputs.pred_masks.squeeze(1))
-            # convert soft mask to hard mask
-            medsam_seg_prob = F.interpolate(
-                medsam_seg_prob,
-                size=(240, 240),
-                mode="bilinear",
-                align_corners=False,
-            )
-
-            medsam_seg = medsam_seg_prob > 0.5
-
-
-            visualize_pred(img.squeeze(0).permute(1,2, 0), mask[0][0], medsam_seg[0][0])
+    plt.tight_layout()
+    plt.show()

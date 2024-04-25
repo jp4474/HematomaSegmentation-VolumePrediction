@@ -275,40 +275,38 @@ class BraTSDataset(Dataset):
 class npyDataset(Dataset):    
     def __init__(self, data_root_folder = 'data', folder = 'train', n_sample=None):
         self.main_folder = os.path.join(data_root_folder, folder)
-        self.imgs_path = os.path.join(data_root_folder, 'npy_' + folder + '/imgs')
-        self.gts_path = os.path.join(data_root_folder, 'npy_' + folder + '/gts')
+        self.imgs_path = os.path.join(data_root_folder, folder + '_final_npy_small/imgs')
+        self.gts_path = os.path.join(data_root_folder, folder + '_final_npy_small/gts')
+        temp1 =  [f for f in os.listdir(self.imgs_path) if f.endswith('.npy')]
+        temp2 =  [f for f in os.listdir(self.gts_path) if f.endswith('.npy')]
         if n_sample is not None:
-            self.imgs = sorted(os.listdir(self.imgs_path))[:n_sample]
-            self.gts = sorted(os.listdir(self.gts_path))[:n_sample]
+            self.imgs = sorted(temp1)[:n_sample]
+            self.gts = sorted(temp2)[:n_sample]
         else:
-            self.imgs = sorted(os.listdir(self.imgs_path))
-            self.gts = sorted(os.listdir(self.gts_path)) 
+            self.imgs = sorted(temp1)
+            self.gts = sorted(temp2)
 
         assert len(self.imgs) == len(self.gts), "Number of images and masks should be same."
 
     def __getitem__(self, index):
         img_file_name = self.imgs[index]
         img = np.load(os.path.join(self.imgs_path, img_file_name), allow_pickle=True)
-        img_256 = resize_longest_side(img, 256)
-        img_256_norm = (img_256 - img_256.min()) / np.clip(
-            img_256.max() - img_256.min(), a_min=1e-8, a_max=None
-        )
-        img_256_padded = pad_image(img_256_norm, 256)
-        img_256_tensor = torch.tensor(img_256_padded).float().permute(2, 0, 1) #.unsqueeze(0)
 
-        gt_file_name = self.gts[index]
-        gt = np.load(os.path.join(self.gts_path, gt_file_name), allow_pickle=True)
+        img_256 = resize_longest_side(img, 256) # <- resize by stetching or smt
+        # img_256_norm = (img_256 - img_256.min()) / np.clip(
+        #     img_256.max() - img_256.min(), a_min=1e-8, a_max=None
+        # )
+        #img_256_padded = pad_image(img_256, 256) # <- resize padding 0s
+        img_256_tensor = torch.tensor(img_256).float().permute(2, 0, 1) #.unsqueeze(0)
+
+        #gt_file_name = self.gts[index]
+        gt = np.load(os.path.join(self.gts_path, img_file_name), allow_pickle=True)
 
         gt[gt > 0] = 1
         gt_tensor = torch.from_numpy(gt).float().unsqueeze(0)
         box = get_bbox256(gt)
         box256 = resize_box_to_256(box, original_size=(256, 256))
-
         box256 = box256[None, ...] # (1, 4)
-
-        # print(img_256_tensor.shape)
-        # print(gt_256_tensor.shape)
-        # print(box256.shape)
 
         return {
             'image': img_256_tensor,
@@ -347,7 +345,7 @@ def loss_function(logits, true_masks):
 
 class SegmentationTrainer(Trainer):
     def __init__(self, model, compute_metrics, args, train_dataset, eval_dataset):
-        #super().__init__(model, args)
+        super().__init__(model, args)
         self.model = model
         self.args = args
         self.train_dataset = train_dataset
@@ -465,8 +463,11 @@ if __name__ == "__main__":
     EPOCHS = 10
     USE_RLORA = True
 
-    train_dataset = npyDataset(folder='train')
     val_dataset =  npyDataset(folder='val')
+    train_dataset = val_dataset
+
+    # train_dataset = BraTSDataset(data_root_folder='train')
+    # val_dataset =  train_dataset
     
     lora_config = LoraConfig(
         r=RANK,
@@ -477,7 +478,7 @@ if __name__ == "__main__":
         target_modules=["q_proj", "v_proj"], # train only q_proj and v_proj in mask decoder
     )
 
-    model = get_peft_model(model, lora_config)
+    # model = get_peft_model(model, lora_config)
     print_trainable_parameters(model)
 
     print("Model Loading Successful.")
@@ -495,7 +496,8 @@ if __name__ == "__main__":
         eval_steps = 1,
         save_strategy="epoch",
         logging_steps=10,
-        push_to_hub=False
+        push_to_hub=False,
+        use_cpu=True,
     )   
 
     trainer = SegmentationTrainer(
