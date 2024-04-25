@@ -273,10 +273,10 @@ class BraTSDataset(Dataset):
         return len(self.file_names)
     
 class npyDataset(Dataset):    
-    def __init__(self, data_root_folder = 'MedSAM/data/npy', folder = '', n_sample=None):
-        main_folder = os.path.join(data_root_folder, folder)
-        self.imgs_path = os.path.join(main_folder, 'imgs')
-        self.gts_path = os.path.join(main_folder, 'gts')
+    def __init__(self, data_root_folder = 'data', folder = 'train', n_sample=None):
+        self.main_folder = os.path.join(data_root_folder, folder)
+        self.imgs_path = os.path.join(data_root_folder, 'npy_' + folder + '/imgs')
+        self.gts_path = os.path.join(data_root_folder, 'npy_' + folder + '/gts')
         if n_sample is not None:
             self.imgs = sorted(os.listdir(self.imgs_path))[:n_sample]
             self.gts = sorted(os.listdir(self.gts_path))[:n_sample]
@@ -288,7 +288,7 @@ class npyDataset(Dataset):
 
     def __getitem__(self, index):
         img_file_name = self.imgs[index]
-        img = np.load(os.path.join(self.imgs_path, img_file_name))
+        img = np.load(os.path.join(self.imgs_path, img_file_name), allow_pickle=True)
         img_256 = resize_longest_side(img, 256)
         img_256_norm = (img_256 - img_256.min()) / np.clip(
             img_256.max() - img_256.min(), a_min=1e-8, a_max=None
@@ -297,11 +297,13 @@ class npyDataset(Dataset):
         img_256_tensor = torch.tensor(img_256_padded).float().permute(2, 0, 1) #.unsqueeze(0)
 
         gt_file_name = self.gts[index]
-        gt = np.load(os.path.join(self.gts_path, gt_file_name))
+        gt = np.load(os.path.join(self.gts_path, gt_file_name), allow_pickle=True)
+
         gt[gt > 0] = 1
         gt_tensor = torch.from_numpy(gt).float().unsqueeze(0)
         box = get_bbox256(gt)
         box256 = resize_box_to_256(box, original_size=(256, 256))
+
         box256 = box256[None, ...] # (1, 4)
 
         # print(img_256_tensor.shape)
@@ -330,27 +332,34 @@ def print_trainable_parameters(model):
     )
 
 def compute_metrics(outputs):
-    dice_metric = Dice()
-    jaccard_metric = BinaryJaccardIndex()
-
     with torch.no_grad():
+        dice_metric = Dice().to(outputs['logits'].device)
+        jaccard_metric = BinaryJaccardIndex().to(outputs['logits'].device)
+
         logits, masks = outputs['logits'], outputs['masks'].int()
 
         return {'dice_metric' : dice_metric(logits, masks).item(), 
                 'jaccard_metric' : jaccard_metric(logits, masks).item()}
 
+
 def loss_function(logits, true_masks):
-    return nn.BCEWithLogitsLoss()(logits, true_masks)
- 
+    return nn.BCEWithLogitsLoss()(logits, true_masks)   
+    #return GeneralizedDiceFocalLoss(sigmoid = True)(logits, true_masks)
+
 class SegmentationTrainer(Trainer):
-    def init(self, model, compute_metrics, args, train_dataset, eval_dataset):
-        #super().__init__()
-        self.model = model
-        self.args = args
+    def __init__(self, model, compute_metrics, args, train_dataset, eval_dataset):
+        super().__init__(model, args)
+        # self.model = model
+        # self.args = args
         self.train_dataset = train_dataset
         self.eval_dataset = eval_dataset
         self.compute_metrics = compute_metrics
-
+        self.dice_metric = Dice()
+        self.jaccard_metric = BinaryJaccardIndex()
+    # def loss_function(self, logits, true_masks):
+    #     pred = nn.Sigmoid()(logits)
+    #     return self.loss_fn(pred, true_masks)
+    
     def compute_loss(self, model, inputs, return_outputs=False):
         #masks = inputs["mask"] #.float()
         #outputs = model.image_encoder(**inputs) 
@@ -358,11 +367,15 @@ class SegmentationTrainer(Trainer):
         logits = outputs['low_res_masks']
         masks = outputs['ground_truth_masks']
         logits = model.postprocess_masks(logits, (256, 256), (masks.shape[2], masks.shape[3])) #.squeeze(1)
-        logits.requires_grad = True
+        
+        # y_pred = nn.Sigmoid()(logits)
+        # y_pred[y_pred > 0.5] = 1
+        # y_pred[y_pred <= 0.5] = 0
+        # print(y_pred)
         masks.requires_grad = True
 
-        loss = loss_function(logits, masks.float())
-
+        loss = loss_function(logits, masks) #self.loss_fn(logits, masks) 
+        #logits.requires_grad = True
         outputs = {'logits' : logits, 'masks' : masks}
         metrics = compute_metrics(outputs)
         metrics = {'train_' + key: value for key, value in metrics.items()}
@@ -390,7 +403,7 @@ class SegmentationTrainer(Trainer):
             masks = outputs['ground_truth_masks']
             logits = model.postprocess_masks(logits, (256, 256), (masks.shape[2], masks.shape[3])) #.squeeze(1)
             masks = outputs['ground_truth_masks']
-            loss = loss_function(logits, masks.float())
+            loss = loss_function(logits, masks)
             outputs = {'logits' : logits, 'masks' : masks}
             metrics = compute_metrics(outputs)
             val_loss.append(loss.item())
@@ -404,9 +417,7 @@ class SegmentationTrainer(Trainer):
         #return {'val_loss' : val_loss, 'val_dice_score' : val_dice_score, 'val_jaccard_score' : val_jaccard_score}
 
 if __name__ == "__main__":
-
     print("Data Loading Intialized.")
-
     medsam_lite_image_encoder = TinyViT(
         img_size=256,
         in_chans=3,
@@ -454,29 +465,28 @@ if __name__ == "__main__":
         prompt_encoder = medsam_lite_prompt_encoder
     )
 
-    lite_medsam_checkpoint_path = os.path.join(os.getcwd(), 'MedSAM/work_dir/LiteMedSAM/lite_medsam.pth')
+    lite_medsam_checkpoint_path = os.path.join(os.getcwd(), 'lite_medsam.pth')
     lite_medsam_checkpoint = torch.load(lite_medsam_checkpoint_path, map_location='cpu')
     model.load_state_dict(lite_medsam_checkpoint)
-    BATCH_SIZE = 2
-    LEARNING_RATE = 5e-4
+    
+    BATCH_SIZE = 1
+    LEARNING_RATE = 0.00005
     RANK = 32
     ALPHA = 32
     DROPOUT = 0.1
     EPOCHS = 10
     USE_RLORA = True
 
-    # fixme
-    #data_root_folder = os.getcwd()
-    # train_dataset = npyDataset()
-    # val_dataset = train_dataset # BraTSDataset(data_root_folder, 'val')
-
+    train_dataset = npyDataset(folder='train')
+    val_dataset =  npyDataset(folder='val')
+    
     lora_config = LoraConfig(
         r=RANK,
         lora_alpha=ALPHA,
         lora_dropout=DROPOUT,
         bias="lora_only",
         use_rslora=USE_RLORA,
-        target_modules=["qkv", "q_proj", "v_proj"],
+        target_modules=["q_proj", "v_proj"], # train only q_proj and v_proj in mask decoder
     )
 
     model = get_peft_model(model, lora_config)
@@ -487,18 +497,17 @@ if __name__ == "__main__":
     model_name = 'LiteMedSAM'
 
     training_args = TrainingArguments(
-        output_dir=f"{model_name}-scene-parse-150-lora",
+        output_dir=f"{model_name}-lora_{RANK}_{ALPHA}",
         learning_rate= LEARNING_RATE,
         num_train_epochs=EPOCHS,
         per_device_train_batch_size=BATCH_SIZE,
         per_device_eval_batch_size=BATCH_SIZE,
         save_total_limit=5,
-        evaluation_strategy="epoch",
+        evaluation_strategy="steps",
         eval_steps = 1,
         save_strategy="epoch",
-        logging_steps=1,
-        push_to_hub=False,
-        use_cpu = True,
+        logging_steps=10,
+        push_to_hub=False
     )   
 
     trainer = SegmentationTrainer(
@@ -509,5 +518,5 @@ if __name__ == "__main__":
         compute_metrics=compute_metrics,
     )
 
-    trainer.train()
+    #trainer.train()
     trainer.evaluate()
