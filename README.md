@@ -5,16 +5,16 @@ Run the pre-processing script to convert the dataset (nii.gz files and npy files
 
 ```bash
 python3 pre_CT_MR.py \
-    -img_path 230620_6L_64C_GN/data/img_train_val_test\
+    -img_path data/img_train_val\
     -img_name_suffix .nii.gz \
-    -gt_path 230620_6L_64C_GN/data/mask_train_val_test\
+    -gt_path data/mask_train_val\
     -gt_name_suffix .npy \
     -output_path 230620_6L_64C_GN/data \
     -num_workers 4 \
     -modality CT \
     -anatomy Brain \
-    -window_level 40 \
-    -window_width 400 \
+    -window_level 65 \
+    -window_width 70 \
     --save_nii
 ```
 Convert npz to npy
@@ -25,6 +25,3 @@ python3 npz_to_npy.py \
     -npy_dir data/npy_val \
     -num_workers 4
 ```
-# TODO:
-- find window_level, window_width
-- modify npydataset class
