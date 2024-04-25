@@ -344,34 +344,22 @@ def compute_metrics(outputs):
 
 def loss_function(logits, true_masks):
     return nn.BCEWithLogitsLoss()(logits, true_masks)   
-    #return GeneralizedDiceFocalLoss(sigmoid = True)(logits, true_masks)
 
 class SegmentationTrainer(Trainer):
     def __init__(self, model, compute_metrics, args, train_dataset, eval_dataset):
-        super().__init__(model, args)
-        # self.model = model
-        # self.args = args
+        #super().__init__(model, args)
+        self.model = model
+        self.args = args
         self.train_dataset = train_dataset
         self.eval_dataset = eval_dataset
         self.compute_metrics = compute_metrics
-        self.dice_metric = Dice()
-        self.jaccard_metric = BinaryJaccardIndex()
-    # def loss_function(self, logits, true_masks):
-    #     pred = nn.Sigmoid()(logits)
-    #     return self.loss_fn(pred, true_masks)
     
     def compute_loss(self, model, inputs, return_outputs=False):
-        #masks = inputs["mask"] #.float()
-        #outputs = model.image_encoder(**inputs) 
         outputs = model(**inputs)
         logits = outputs['low_res_masks']
         masks = outputs['ground_truth_masks']
         logits = model.postprocess_masks(logits, (256, 256), (masks.shape[2], masks.shape[3])) #.squeeze(1)
         
-        # y_pred = nn.Sigmoid()(logits)
-        # y_pred[y_pred > 0.5] = 1
-        # y_pred[y_pred <= 0.5] = 0
-        # print(y_pred)
         masks.requires_grad = True
 
         loss = loss_function(logits, masks) #self.loss_fn(logits, masks) 
@@ -468,7 +456,7 @@ if __name__ == "__main__":
     lite_medsam_checkpoint_path = os.path.join(os.getcwd(), 'lite_medsam.pth')
     lite_medsam_checkpoint = torch.load(lite_medsam_checkpoint_path, map_location='cpu')
     model.load_state_dict(lite_medsam_checkpoint)
-    
+
     BATCH_SIZE = 1
     LEARNING_RATE = 0.00005
     RANK = 32
