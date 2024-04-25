@@ -21,8 +21,8 @@ Convert npz to npy
 
 ```bash
 python3 npz_to_npy.py \
-    -npz_dir 230620_6L_64C_GN/data/MedSAM_train \
-    -npy_dir 230620_6L_64C_GN/data/npy \
+    -npz_dir data/MedSAM_val/CT_Brain \
+    -npy_dir data/npy_val \
     -num_workers 4
 ```
 # TODO:
