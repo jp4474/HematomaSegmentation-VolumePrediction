@@ -3,7 +3,8 @@
 # pip install connected-components-3d
 import numpy as np
 
-# import nibabel as nib
+import torch
+import nibabel as nib
 import SimpleITK as sitk
 import os
 
@@ -99,37 +100,37 @@ def preprocess(name, npz_path):
     ## gt_sitk = sitk.ReadImage(join(gt_path, gt_name))
     gt_np = np.load(join(gt_path, gt_name))
     gt_np = np.transpose(gt_np, (2, 0, 1))  
-    gt_data_ori = np.uint8(gt_np)
-    # remove label ids
-    for remove_label_id in remove_label_ids:
-        gt_data_ori[gt_data_ori == remove_label_id] = 0
-    # label tumor masks as instances and remove from gt_data_ori
-    if tumor_id is not None:
-        tumor_bw = np.uint8(gt_data_ori == tumor_id)
-        gt_data_ori[tumor_bw > 0] = 0
-        # label tumor masks as instances
-        tumor_inst, tumor_n = cc3d.connected_components(
-            tumor_bw, connectivity=26, return_N=True
-        )
-        # put the tumor instances back to gt_data_ori
-        gt_data_ori[tumor_inst > 0] = (
-            tumor_inst[tumor_inst > 0] + np.max(gt_data_ori) + 1
-        )
+    gt_data_ori = gt_np
+    # # remove label ids
+    # for remove_label_id in remove_label_ids:
+    #     gt_data_ori[gt_data_ori == remove_label_id] = 0
+    # # label tumor masks as instances and remove from gt_data_ori
+    # if tumor_id is not None:
+    #     tumor_bw = np.uint8(gt_data_ori == tumor_id)
+    #     gt_data_ori[tumor_bw > 0] = 0
+    #     # label tumor masks as instances
+    #     tumor_inst, tumor_n = cc3d.connected_components(
+    #         tumor_bw, connectivity=26, return_N=True
+    #     )
+    #     # put the tumor instances back to gt_data_ori
+    #     gt_data_ori[tumor_inst > 0] = (
+    #         tumor_inst[tumor_inst > 0] + np.max(gt_data_ori) + 1
+    #     )
 
     # # exclude the objects with less than 1000 pixels in 3D
     # gt_data_ori = cc3d.dust(
     #     gt_data_ori, threshold=voxel_num_thre3d, connectivity=26, in_place=True
     # )
 
-    # # remove small objects with less than 100 pixels in 2D slices
+    # remove small objects with less than 100 pixels in 2D slices
 
-    # for slice_i in range(gt_data_ori.shape[0]):
-    #     gt_i = gt_data_ori[slice_i, :, :]
-    #     # remove small objects with less than 100 pixels
-    #     # reason: fro such small objects, the main challenge is detection rather than segmentation
-    #     gt_data_ori[slice_i, :, :] = cc3d.dust(
-    #         gt_i, threshold=voxel_num_thre2d, connectivity=8, in_place=True
-    #     )
+    for slice_i in range(gt_data_ori.shape[0]):
+        gt_i = gt_data_ori[slice_i, :, :]
+        # remove small objects with less than 100 pixels
+        # reason: fro such small objects, the main challenge is detection rather than segmentation
+        gt_data_ori[slice_i, :, :] = cc3d.dust(
+            gt_i, threshold=voxel_num_thre2d, connectivity=8, in_place=True
+        )
 
     # find non-zero slices
     z_index, _, _ = np.where(gt_data_ori > 0)
@@ -141,16 +142,23 @@ def preprocess(name, npz_path):
         # load image and preprocess
         img_sitk = sitk.ReadImage(join(nii_path, image_name))
         image_data = sitk.GetArrayFromImage(img_sitk)
+        #image_data_pre = image_data #.transpose(2, 0, 1)
         # nii preprocess start
         if modality == "CT":
             lower_bound = WINDOW_LEVEL - WINDOW_WIDTH / 2 # 65, 70
             upper_bound = WINDOW_LEVEL + WINDOW_WIDTH / 2
             image_data_pre = np.clip(image_data, lower_bound, upper_bound)  # transfroms np.min = lowerbound
             image_data_pre = (image_data_pre - lower_bound) / (upper_bound - lower_bound)
+            # for i in range(image_data_pre.shape[0]):
+            #     slice = image_data_pre[i]
+            #     slice = np.clip(slice, lower_bound, upper_bound)  # transfroms np.min = lowerbound
+            #     image_data_pre[i] = (slice - lower_bound) / (upper_bound - lower_bound) * 255.0
+            #print('CT modality; code is used')
         else:
             lower_bound, upper_bound = np.percentile(
                 image_data[image_data > 0], 0.5
             ), np.percentile(image_data[image_data > 0], 99.5)
+            image_data_pre = image_data
             image_data_pre = np.clip(image_data, lower_bound, upper_bound)
             image_data_pre = (
                 (image_data_pre - np.min(image_data_pre))
@@ -159,28 +167,28 @@ def preprocess(name, npz_path):
             )
             image_data_pre[image_data == 0] = 0
 
-        image_data_pre = np.uint8(image_data_pre)
+        #image_data_pre = np.uint8(image_data_pre)
         img_roi = image_data_pre[z_index, :, :]
         np.savez_compressed(join(npz_path, prefix + gt_name.split(gt_name_suffix)[0]+'.npz'), imgs=img_roi, gts=gt_roi, spacing=img_sitk.GetSpacing())
 
         # save the image and ground truth as nii files for sanity check;
         # they can be removed
-        if save_nii:
-            img_roi_sitk = sitk.GetImageFromArray(img_roi)
-            img_roi_sitk.SetSpacing(img_sitk.GetSpacing())
-            sitk.WriteImage(
-                img_roi_sitk,
-                join(npz_path, prefix + gt_name.split(gt_name_suffix)[0] + "_img.nii.gz"),
-            )
-            gt_roi_sitk = sitk.GetImageFromArray(gt_roi)
-            gt_roi_sitk.SetSpacing(img_sitk.GetSpacing())
-            sitk.WriteImage(
-                gt_roi_sitk,
-                join(npz_path, prefix + gt_name.split(gt_name_suffix)[0] + "_gt.nii.gz"),
-            )
+        # if save_nii:
+        #     img_roi_sitk = sitk.GetImageFromArray(img_roi)
+        #     img_roi_sitk.SetSpacing(img_sitk.GetSpacing())
+        #     sitk.WriteImage(
+        #         img_roi_sitk,
+        #         join(npz_path, prefix + gt_name.split(gt_name_suffix)[0] + "_img.nii.gz"),
+        #     )
+        #     gt_roi_sitk = sitk.GetImageFromArray(gt_roi)
+        #     gt_roi_sitk.SetSpacing(img_sitk.GetSpacing())
+        #     sitk.WriteImage(
+        #         gt_roi_sitk,
+        #         join(npz_path, prefix + gt_name.split(gt_name_suffix)[0] + "_gt.nii.gz"),
+        #     )
 
 if __name__ == "__main__":
-    tr_names = names[:40]
+    tr_names = names
     # ts_names = names[40:]
 
     preprocess_tr = partial(preprocess, npz_path=npz_tr_path)
