@@ -23,6 +23,14 @@ import cv2
 import argparse
 from tiny_vit_sam import TinyViT
 from segment_anything.modeling import MaskDecoder, PromptEncoder, TwoWayTransformer
+from transformers.utils import logging
+
+os.environ['PJRT_DEVICE'] = 'CUDA'
+
+logging.set_verbosity_info()
+logger = logging.get_logger("transformers")
+logger.info("INFO")
+logger.warning("WARN")
 
 def get_bbox256(mask_256, bbox_shift=3):
     """
@@ -478,7 +486,7 @@ model.load_state_dict(lite_medsam_checkpoint)
 BATCH_SIZE = args.batch_size
 LEARNING_RATE = args.learning_rate
 RANK = args.rank
-ALPHA = args.alphaç
+ALPHA = args.alpha
 DROPOUT = args.dropout
 EPOCHS = args.epochs
 USE_RLORA = args.use_rlora
