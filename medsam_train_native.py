@@ -20,6 +20,7 @@ from pathlib import Path
 import nibabel as nib
 import numpy as np
 import cv2
+import argparse
 from tiny_vit_sam import TinyViT
 from segment_anything.modeling import MaskDecoder, PromptEncoder, TwoWayTransformer
 
@@ -41,8 +42,6 @@ def get_bbox256(mask_256, bbox_shift=3):
         bounding box coordinates in the resized image
     """
     y_indices, x_indices = np.where(mask_256 > 0)
-
-    # print(f'x_indices: {x_indices=} and y_indices: {y_indices=}')
     
     x_min, x_max = np.min(x_indices), np.max(x_indices)
     y_min, y_max = np.min(y_indices), np.max(y_indices)
@@ -165,8 +164,6 @@ class MedSAM_Lite(nn.Module):
             the upsampled mask to the original size
         """
         # Crop
-        #print(new_size[0])
-        #print(new_size[1])
         #masks = masks[..., :new_size[0], :new_size[1]]
         # Resize
         masks = F.interpolate(
@@ -311,7 +308,6 @@ class npyDataset(Dataset):
         box512 = get_bbox256(gt)
         box256 = resize_box_to_256(box512, original_size=(256, 256))
         box256 = box256[None, ...] # (1, 4)
-        print(img_file_name)
         return {
             'image': img_256_tensor,
             'mask': gt_tensor,
@@ -345,7 +341,15 @@ def compute_metrics(outputs):
 
 
 def loss_function(logits, true_masks):
-    return nn.BCEWithLogitsLoss()(logits, true_masks)   
+    def dice_loss(pred,target):
+        numerator = 2 * torch.sum(pred * target)
+        denominator = torch.sum(pred + target)
+        return 1 - (numerator + 1) / (denominator + 1)
+    
+    pred = nn.Sigmoid()(logits)
+    pred[pred > 0.5] = 1
+    pred[pred <= 0.5] = 0
+    return dice_loss(pred, true_masks)   
 
 class SegmentationTrainer(Trainer):
     def __init__(self, model, compute_metrics, args, train_dataset, eval_dataset):
@@ -391,15 +395,10 @@ class SegmentationTrainer(Trainer):
             outputs = model(**batch)
             logits = outputs['low_res_masks']
             masks = outputs['ground_truth_masks']
-            # logits = nn.Sigmoid()(logits)
-            # logits[logits > 0.5] = 1
-            # logits = model.postprocess_masks(logits, (256, 256), (masks.shape[2], masks.shape[3]))
             masks = outputs['ground_truth_masks']
-
             loss = loss_function(logits, masks)
             outputs = {'logits' : logits, 'masks' : masks}
             metrics = compute_metrics(outputs)
-            print(metrics)
             val_loss.append(loss.item())
             dice_score.append(metrics['dice_metric'])
             jaccard_score.append(metrics['jaccard_metric'])
@@ -408,153 +407,123 @@ class SegmentationTrainer(Trainer):
         val_dice_score = np.mean(dice_score)
         val_jaccard_score = np.mean(jaccard_score)
         print({'val_loss' : val_loss, 'val_dice_score' : val_dice_score, 'val_jaccard_score' : val_jaccard_score})
-        #return {'val_loss' : val_loss, 'val_dice_score' : val_dice_score, 'val_jaccard_score' : val_jaccard_score}
 
-if __name__ == "__main__":
-    print("Data Loading Intialized.")
-    medsam_lite_image_encoder = TinyViT(
-        img_size=256,
-        in_chans=3,
-        embed_dims=[
-            64, ## (64, 256, 256)
-            128, ## (128, 128, 128)
-            160, ## (160, 64, 64)
-            320 ## (320, 64, 64) 
-        ],
-        depths=[2, 2, 6, 2],
-        num_heads=[2, 4, 5, 10],
-        window_sizes=[7, 7, 14, 7],
-        mlp_ratio=4.,
-        drop_rate=0.,
-        drop_path_rate=0.0,
-        use_checkpoint=False,
-        mbconv_expand_ratio=4.0,
-        local_conv_size=3,
-        layer_lr_decay=0.8
-    )
+# Parse command-line arguments
+parser = argparse.ArgumentParser(description='Train MedSAM Lite model')
+parser.add_argument('--batch_size', type=int, default=1, help='Batch size for training')
+parser.add_argument('--learning_rate', type=float, default=0.00005, help='Learning rate for training')
+parser.add_argument('--rank', type=int, default=32, help='Rank for LoraConfig')
+parser.add_argument('--alpha', type=int, default=32, help='Alpha for LoraConfig')
+parser.add_argument('--dropout', type=float, default=0.1, help='Dropout for LoraConfig')
+parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs')
+parser.add_argument('--use_rlora', type=bool, default=True, help='Use RLORA in LoraConfig')
+# parser.add_argument('--eval_steps', type=int, default=10, help='Number of eval steps')
 
-    medsam_lite_prompt_encoder = PromptEncoder(
-        embed_dim=256,
-        image_embedding_size=(64, 64),
-        input_image_size=(256, 256),
-        mask_in_chans=16
-    )
+args = parser.parse_args()
 
-    medsam_lite_mask_decoder = MaskDecoder(
-        num_multimask_outputs=3,
-            transformer=TwoWayTransformer(
-                depth=2,
-                embedding_dim=256,
-                mlp_dim=2048,
-                num_heads=8,
-            ),
-            transformer_dim=256,
-            iou_head_depth=3,
-            iou_head_hidden_dim=256,
-    )
+print("Data Loading Intialized.")
 
-    model = MedSAM_Lite(
-        image_encoder = medsam_lite_image_encoder,
-        mask_decoder = medsam_lite_mask_decoder,
-        prompt_encoder = medsam_lite_prompt_encoder
-    )
+medsam_lite_image_encoder = TinyViT(
+    img_size=256,
+    in_chans=3,
+    embed_dims=[
+        64, ## (64, 256, 256)
+        128, ## (128, 128, 128)
+        160, ## (160, 64, 64)
+        320 ## (320, 64, 64) 
+    ],
+    depths=[2, 2, 6, 2],
+    num_heads=[2, 4, 5, 10],
+    window_sizes=[7, 7, 14, 7],
+    mlp_ratio=4.,
+    drop_rate=0.,
+    drop_path_rate=0.0,
+    use_checkpoint=False,
+    mbconv_expand_ratio=4.0,
+    local_conv_size=3,
+    layer_lr_decay=0.8
+)
 
-    lite_medsam_checkpoint_path = os.path.join(os.getcwd(), 'lite_medsam.pth')
-    lite_medsam_checkpoint = torch.load(lite_medsam_checkpoint_path, map_location='cpu')
-    model.load_state_dict(lite_medsam_checkpoint)
+medsam_lite_prompt_encoder = PromptEncoder(
+    embed_dim=256,
+    image_embedding_size=(64, 64),
+    input_image_size=(256, 256),
+    mask_in_chans=16
+)
 
-    BATCH_SIZE = 1
-    LEARNING_RATE = 0.00005
-    RANK = 32
-    ALPHA = 32
-    DROPOUT = 0.1
-    EPOCHS = 10
-    USE_RLORA = True
+medsam_lite_mask_decoder = MaskDecoder(
+    num_multimask_outputs=3,
+        transformer=TwoWayTransformer(
+            depth=2,
+            embedding_dim=256,
+            mlp_dim=2048,
+            num_heads=8,
+        ),
+        transformer_dim=256,
+        iou_head_depth=3,
+        iou_head_hidden_dim=256,
+)
 
-    val_dataset = npyDataset(folder='val')
-    train_dataset =  val_dataset #npyDataset(folder='train')
+model = MedSAM_Lite(
+    image_encoder = medsam_lite_image_encoder,
+    mask_decoder = medsam_lite_mask_decoder,
+    prompt_encoder = medsam_lite_prompt_encoder
+)
 
-    lora_config = LoraConfig(
-        r=RANK,
-        lora_alpha=ALPHA,
-        lora_dropout=DROPOUT,
-        bias="lora_only",
-        use_rslora=USE_RLORA,
-        target_modules=["q_proj", "v_proj"], # train only q_proj and v_proj in mask decoder
-    )
+lite_medsam_checkpoint_path = os.path.join(os.getcwd(), 'lite_medsam.pth')
+lite_medsam_checkpoint = torch.load(lite_medsam_checkpoint_path, map_location='cpu')
+model.load_state_dict(lite_medsam_checkpoint)
 
-    model = get_peft_model(model, lora_config)
-    print_trainable_parameters(model)
+# Use the arguments in the script
+BATCH_SIZE = args.batch_size
+LEARNING_RATE = args.learning_rate
+RANK = args.rank
+ALPHA = args.alphaç
+DROPOUT = args.dropout
+EPOCHS = args.epochs
+USE_RLORA = args.use_rlora
+# EVAL_STEPS = args.eval_steps
 
-    print("Model Loading Successful.")
+train_dataset = npyDataset(folder='train')
+val_dataset = npyDataset(folder='val')
 
-    model_name = 'LiteMedSAM'
+lora_config = LoraConfig(
+    r=RANK,
+    lora_alpha=ALPHA,
+    lora_dropout=DROPOUT,
+    bias="lora_only",
+    use_rslora=USE_RLORA,
+    target_modules=["q_proj", "v_proj"], # train only q_proj and v_proj in mask decoder
+)
 
-    training_args = TrainingArguments(
-        output_dir=f"{model_name}-lora_{RANK}_{ALPHA}",
-        learning_rate= LEARNING_RATE,
-        num_train_epochs=EPOCHS,
-        per_device_train_batch_size=BATCH_SIZE,
-        per_device_eval_batch_size=BATCH_SIZE,
-        save_total_limit=5,
-        evaluation_strategy="steps",
-        eval_steps = 1,
-        save_strategy="epoch",
-        logging_steps=10,
-        push_to_hub=False,
-        use_cpu=True,
-    )   
+model = get_peft_model(model, lora_config)
+print_trainable_parameters(model)
 
-    trainer = SegmentationTrainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=val_dataset,
-        compute_metrics=compute_metrics,
-    )
+print("Model Loading Successful.")
 
+model_name = 'LiteMedSAM'
 
-    import matplotlib.pyplot as plt
-    import math
+training_args = TrainingArguments(
+    output_dir=f"{model_name}-lora_{RANK}_{ALPHA}",
+    learning_rate= LEARNING_RATE,
+    num_train_epochs=EPOCHS,
+    per_device_train_batch_size=BATCH_SIZE,
+    per_device_eval_batch_size=BATCH_SIZE,
+    save_total_limit=10,
+    evaluation_strategy="epoch",
+    #eval_steps = EVAL_STEPS,
+    save_strategy="epoch",
+    logging_steps=10,
+    push_to_hub=False,
+)   
 
-    # data = next(iter(DataLoader(train_dataset, batch_size=1)))
-    img = np.load(os.path.join(os.getcwd(),'data/val_final_npy/imgs/CT_Brain_768_Axial_4-003.npy'))
-    mask = np.load(os.path.join(os.getcwd(),'data/val_final_npy/gts/CT_Brain_768_Axial_4-003.npy'))
+trainer = SegmentationTrainer(
+    model=model,
+    args=training_args,
+    train_dataset=train_dataset,
+    eval_dataset=val_dataset,
+    compute_metrics=compute_metrics,
+)
 
-    fig, ax = plt.subplots(1, 2)
-
-    # Display the images
-    ax[0].imshow(img)
-    ax[0].set_title('Image')
-
-    ax[1].imshow(mask)
-    ax[1].set_title('Mask')
-
-    plt.show()
-    # #Get the number of slices
-    # num_slices = mask.shape[2]
-
-    # # Calculate the number of rows and columns for the grid
-    # grid_size = math.ceil(math.sqrt(num_slices))
-    # fig, axes = plt.subplots(grid_size, grid_size, figsize=(5, 5))
-
-    # # Loop over each slice
-    # for i in range(grid_size * grid_size):
-    #     row = i // grid_size
-    #     col = i % grid_size
-    #     if i < num_slices:
-    #         # Display the slice
-    #         #axes[row, col].imshow(img[:,:,i].T, cmap='gray')
-    #         axes[row, col].imshow(mask[:,:,i].T, cmap='jet', alpha=0.5)
-    #         axes[row, col].set_title(f'Slice {i}')
-    #     else:
-    #         # Hide axes if there's no data
-    #         axes[row, col].axis('off')
-
-    # # Show the plot
-    # plt.tight_layout()
-    # plt.show()
-
-
-    #trainer.train()
-    # trainer.evaluate()
+trainer.train()
+#trainer.evaluate()
