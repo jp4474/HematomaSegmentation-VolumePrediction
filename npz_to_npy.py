@@ -42,6 +42,7 @@ def convert_npz_to_npy(npz_name):
     npz = np.load(npz_path, allow_pickle=True, mmap_mode="r")
     imgs = npz["imgs"]
     gts = npz["gts"]
+    
     if len(gts.shape) > 2: ## 3D image
         for i in range(imgs.shape[0]):
             img_i = imgs[i, :, :]
@@ -66,6 +67,7 @@ def convert_npz_to_npy(npz_name):
         img_01 = (img_3c - img_3c.min()) / np.clip(
             img_3c.max() - img_3c.min(), a_min=1e-8, a_max=None
         )  # normalize to [0, 1], (H, W, 3)
+
         assert img_01.shape[:2] == gts.shape
 
         np.save(join(npy_dir, "imgs", name + ".npy"), img_01)

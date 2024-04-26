@@ -41,6 +41,9 @@ def get_bbox256(mask_256, bbox_shift=3):
         bounding box coordinates in the resized image
     """
     y_indices, x_indices = np.where(mask_256 > 0)
+
+    # print(f'x_indices: {x_indices=} and y_indices: {y_indices=}')
+    
     x_min, x_max = np.min(x_indices), np.max(x_indices)
     y_min, y_max = np.min(y_indices), np.max(y_indices)
     # add perturbation to bounding box coordinates and test the robustness
@@ -54,7 +57,6 @@ def get_bbox256(mask_256, bbox_shift=3):
     bboxes256 = np.array([x_min, y_min, x_max, y_max])
 
     return bboxes256
-
 def resize_box_to_256(box, original_size):
     """
     the input bounding box is obtained from the original image
@@ -163,7 +165,9 @@ class MedSAM_Lite(nn.Module):
             the upsampled mask to the original size
         """
         # Crop
-        masks = masks[..., :new_size[0], :new_size[1]]
+        #print(new_size[0])
+        #print(new_size[1])
+        #masks = masks[..., :new_size[0], :new_size[1]]
         # Resize
         masks = F.interpolate(
             masks,
@@ -275,8 +279,8 @@ class BraTSDataset(Dataset):
 class npyDataset(Dataset):    
     def __init__(self, data_root_folder = 'data', folder = 'train', n_sample=None):
         self.main_folder = os.path.join(data_root_folder, folder)
-        self.imgs_path = os.path.join(data_root_folder, folder + '_final_npy_small/imgs')
-        self.gts_path = os.path.join(data_root_folder, folder + '_final_npy_small/gts')
+        self.imgs_path = os.path.join(data_root_folder, folder + '_final_npy/imgs')
+        self.gts_path = os.path.join(data_root_folder, folder + '_final_npy/gts')
         temp1 =  [f for f in os.listdir(self.imgs_path) if f.endswith('.npy')]
         temp2 =  [f for f in os.listdir(self.gts_path) if f.endswith('.npy')]
         if n_sample is not None:
@@ -297,17 +301,17 @@ class npyDataset(Dataset):
         #     img_256.max() - img_256.min(), a_min=1e-8, a_max=None
         # )
         #img_256_padded = pad_image(img_256, 256) # <- resize padding 0s
-        img_256_tensor = torch.tensor(img_256).float().permute(2, 0, 1) #.unsqueeze(0)
+        img_256_tensor = torch.tensor(img_256).float().permute(2, 1, 0) #.unsqueeze(0)
 
         #gt_file_name = self.gts[index]
         gt = np.load(os.path.join(self.gts_path, img_file_name), allow_pickle=True)
-
         gt[gt > 0] = 1
-        gt_tensor = torch.from_numpy(gt).float().unsqueeze(0)
-        box = get_bbox256(gt)
-        box256 = resize_box_to_256(box, original_size=(256, 256))
+        gt = resize_longest_side(gt, 256) # 512 -> 256
+        gt_tensor = torch.from_numpy(gt).float().unsqueeze(0) # 512, 512
+        box512 = get_bbox256(gt)
+        box256 = resize_box_to_256(box512, original_size=(256, 256))
         box256 = box256[None, ...] # (1, 4)
-
+        print(img_file_name)
         return {
             'image': img_256_tensor,
             'mask': gt_tensor,
@@ -387,11 +391,15 @@ class SegmentationTrainer(Trainer):
             outputs = model(**batch)
             logits = outputs['low_res_masks']
             masks = outputs['ground_truth_masks']
-            logits = model.postprocess_masks(logits, (256, 256), (masks.shape[2], masks.shape[3])) #.squeeze(1)
+            # logits = nn.Sigmoid()(logits)
+            # logits[logits > 0.5] = 1
+            # logits = model.postprocess_masks(logits, (256, 256), (masks.shape[2], masks.shape[3]))
             masks = outputs['ground_truth_masks']
+
             loss = loss_function(logits, masks)
             outputs = {'logits' : logits, 'masks' : masks}
             metrics = compute_metrics(outputs)
+            print(metrics)
             val_loss.append(loss.item())
             dice_score.append(metrics['dice_metric'])
             jaccard_score.append(metrics['jaccard_metric'])
@@ -463,12 +471,9 @@ if __name__ == "__main__":
     EPOCHS = 10
     USE_RLORA = True
 
-    val_dataset =  npyDataset(folder='val')
-    train_dataset = val_dataset
+    val_dataset = npyDataset(folder='val')
+    train_dataset =  val_dataset #npyDataset(folder='train')
 
-    # train_dataset = BraTSDataset(data_root_folder='train')
-    # val_dataset =  train_dataset
-    
     lora_config = LoraConfig(
         r=RANK,
         lora_alpha=ALPHA,
@@ -478,7 +483,7 @@ if __name__ == "__main__":
         target_modules=["q_proj", "v_proj"], # train only q_proj and v_proj in mask decoder
     )
 
-    # model = get_peft_model(model, lora_config)
+    model = get_peft_model(model, lora_config)
     print_trainable_parameters(model)
 
     print("Model Loading Successful.")
@@ -508,5 +513,48 @@ if __name__ == "__main__":
         compute_metrics=compute_metrics,
     )
 
+
+    import matplotlib.pyplot as plt
+    import math
+
+    # data = next(iter(DataLoader(train_dataset, batch_size=1)))
+    img = np.load(os.path.join(os.getcwd(),'data/val_final_npy/imgs/CT_Brain_768_Axial_4-003.npy'))
+    mask = np.load(os.path.join(os.getcwd(),'data/val_final_npy/gts/CT_Brain_768_Axial_4-003.npy'))
+
+    fig, ax = plt.subplots(1, 2)
+
+    # Display the images
+    ax[0].imshow(img)
+    ax[0].set_title('Image')
+
+    ax[1].imshow(mask)
+    ax[1].set_title('Mask')
+
+    plt.show()
+    # #Get the number of slices
+    # num_slices = mask.shape[2]
+
+    # # Calculate the number of rows and columns for the grid
+    # grid_size = math.ceil(math.sqrt(num_slices))
+    # fig, axes = plt.subplots(grid_size, grid_size, figsize=(5, 5))
+
+    # # Loop over each slice
+    # for i in range(grid_size * grid_size):
+    #     row = i // grid_size
+    #     col = i % grid_size
+    #     if i < num_slices:
+    #         # Display the slice
+    #         #axes[row, col].imshow(img[:,:,i].T, cmap='gray')
+    #         axes[row, col].imshow(mask[:,:,i].T, cmap='jet', alpha=0.5)
+    #         axes[row, col].set_title(f'Slice {i}')
+    #     else:
+    #         # Hide axes if there's no data
+    #         axes[row, col].axis('off')
+
+    # # Show the plot
+    # plt.tight_layout()
+    # plt.show()
+
+
     #trainer.train()
-    trainer.evaluate()
+    # trainer.evaluate()
