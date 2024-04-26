@@ -29,8 +29,7 @@ os.environ['PJRT_DEVICE'] = 'CUDA'
 
 logging.set_verbosity_info()
 logger = logging.get_logger("transformers")
-logger.info("INFO")
-logger.warning("WARN")
+
 
 def get_bbox256(mask_256, bbox_shift=3):
     """
@@ -183,103 +182,7 @@ class MedSAM_Lite(nn.Module):
 
         return masks
     
-class SliceDataset:
-    def __init__(self, img_pathes: Path, mask_pathes: Path, intensity_min, intensity_max) -> None:
-        self.img_pathes = img_pathes
-        self.mask_pathes = mask_pathes
-        self.slices = [nib.load(p).shape[-1] for p in self.img_pathes]
-        self.cum_slices = np.cumsum(self.slices)
-        self.intensity_min = intensity_min
-        self.intensity_max = intensity_max
-        #self.processor = processor
-        
 
-    def __getitem__(self, index: int):
-        path_index = np.searchsorted(self.cum_slices, index, side='right')
-        if path_index == 0:
-            slice_index = index
-        else:
-            slice_index = index - self.cum_slices[path_index - 1]
-
-        img = nib.load(self.img_pathes[path_index]).get_fdata()[:,:,slice_index]
-        img = windowing(img, self.intensity_min, self.intensity_max)[np.newaxis, ...] # minmax scaler
-        # mask = np.load(self.mask_pathes[path_index])[:,:,slice_index][np.newaxis, ...]
-        mask = nib.load(self.mask_pathes[path_index]).get_fdata()[:,:,slice_index]
-        bbox = compute_bounding_box(mask)
-
-        # TODO: 
-        # inputs = self.processor(img, input_boxes=bbox, do_normalize = False, do_rescale = False, return_tensors="pt")
-
-        inputs['mask'] = mask.to(dtype=torch.float32)
-        inputs['pixel_values'] = inputs['pixel_values'].squeeze(0)
-        inputs['input_boxes'] = inputs['input_boxes'].squeeze(0)
-        inputs = inputs.to(dtype=torch.float32)
-        return inputs
-        # return img.astype(np.float32), mask.astype(np.float32)
-    
-    def __len__(self):
-        return self.cum_slices[-1]
-
-class VolumeDataset:
-    def __init__(self, img_pathes: Path, mask_pathes: Path, intensity_min, intensity_max) -> None:
-        self.img_pathes = img_pathes
-        self.mask_pathes = mask_pathes
-        self.intensity_min = intensity_min
-        self.intensity_max = intensity_max
-
-    def __getitem__(self, index: int):
-        path_index = index
-
-        img = nib.load(self.img_pathes[path_index]).get_fdata()
-        img = np.transpose(img, (2,0,1)) # why transposing?
-        img = windowing(img, self.intensity_min, self.intensity_max)[:, np.newaxis, ...]
-        mask = np.load(self.mask_pathes[path_index])
-        mask = np.transpose(mask, (2,0,1))[:, np.newaxis, ...]
-
-        return img.astype(np.float32), mask.astype(np.float32), path_index
-    
-    def __len__(self):
-        return len(self.img_pathes)
-
-
-def windowing(image, min_value, max_value):
-    image_new = np.clip(image, min_value, max_value)
-    image_new = (image_new - min_value) / (max_value - min_value)
-    return image_new
-
-class BraTSDataset(Dataset):    
-    def __init__(self, data_root_folder, folder = '', n_sample=None):
-        main_folder = os.path.join(data_root_folder, folder)
-        self.folder_path = os.path.join(main_folder, 'slice')
-        self.file_names = [f for f in os.listdir(self.folder_path) if f.endswith('.npy')]
-        #self.file_names = sorted(os.listdir(self.folder_path))[:n_sample]
-
-    def __getitem__(self, index):
-        file_name = self.file_names[index]
-        sample = np.load(os.path.join(self.folder_path, file_name), allow_pickle=True)
-        img = sample[0,:,:]
-        gt = sample[1,:,:]
-        img_256 = resize_longest_side(img, 256)
-        img_256_norm = (img_256 - img_256.min()) / np.clip(
-            img_256.max() - img_256.min(), a_min=1e-8, a_max=None
-        )
-        img_256_padded = pad_image(img_256_norm, 256)
-        img_256_tensor = torch.tensor(img_256_padded).float().unsqueeze(-1).permute(2, 0, 1) #.unsqueeze(0)
-        img_256_tensor = torch.repeat_interleave(img_256_tensor, 3, dim=0)
-        gt[gt > 0] = 1
-        gt_tensor = torch.from_numpy(gt).float().unsqueeze(0)
-        box = get_bbox256(gt)
-        box256 = resize_box_to_256(box, original_size=(256, 256))
-        box256 = box256[None, ...] # (1, 4)
-
-        return {
-            'image': img_256_tensor,
-            'mask': gt_tensor,
-            'box_np': box256
-        }
-        
-    def __len__(self):
-        return len(self.file_names)
     
 class npyDataset(Dataset):    
     def __init__(self, data_root_folder = 'data', folder = 'train', n_sample=None):
@@ -349,15 +252,16 @@ def compute_metrics(outputs):
 
 
 def loss_function(logits, true_masks):
-    def dice_loss(pred,target):
-        numerator = 2 * torch.sum(pred * target)
-        denominator = torch.sum(pred + target)
-        return 1 - (numerator + 1) / (denominator + 1)
+    # def dice_loss(pred,target):
+    #     numerator = 2 * torch.sum(pred * target)
+    #     denominator = torch.sum(pred + target)
+    #     return 1 - (numerator + 1) / (denominator + 1)
     
-    pred = nn.Sigmoid()(logits)
-    pred[pred > 0.5] = 1
-    pred[pred <= 0.5] = 0
-    return dice_loss(pred, true_masks)   
+    # pred = nn.Sigmoid()(logits)
+    # pred[pred > 0.5] = 1
+    # pred[pred <= 0.5] = 0
+    # return dice_loss(pred, true_masks)   
+    return nn.BCEWithLogitsLoss()(logits, true_masks)
 
 class SegmentationTrainer(Trainer):
     def __init__(self, model, compute_metrics, args, train_dataset, eval_dataset):
@@ -506,7 +410,7 @@ lora_config = LoraConfig(
 
 model = get_peft_model(model, lora_config)
 print_trainable_parameters(model)
-
+model.train()
 print("Model Loading Successful.")
 
 model_name = 'LiteMedSAM'
@@ -523,6 +427,7 @@ training_args = TrainingArguments(
     save_strategy="epoch",
     logging_steps=10,
     push_to_hub=False,
+    gradient_accumulation_steps=50
 )   
 
 trainer = SegmentationTrainer(
