@@ -1,5 +1,8 @@
 # HematomaSegmentation-VolumePrediction
 
+## File Description
+
+
 ## Folder Structure 
 Folder structure for data
 ```bash
@@ -22,8 +25,8 @@ Folder structure for data
     │   ├── gts
     │   └── imgs
     └──train_final_npy
-    ├── gts
-    └── imgs
+        ├── gts
+        └── imgs
 ```
 ## Preprocessing
 Run the pre-processing script to convert the dataset (nii.gz files and npy files) to npz format:
