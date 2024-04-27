@@ -255,9 +255,9 @@ class SegmentationTrainer(Trainer):
         masks.requires_grad = True
         loss = loss_function(logits, masks)
         outputs = {'logits' : logits, 'masks' : masks}
-        # metrics = compute_metrics(outputs)
+        #metrics = compute_metrics(outputs)
         # metrics = {'train_' + key: value for key, value in metrics.items()}
-        # self.log(metrics)
+        #self.log(metrics)
         return (loss, outputs) if return_outputs else loss
     
     def evaluate(
@@ -288,18 +288,20 @@ class SegmentationTrainer(Trainer):
         val_loss = np.mean(val_loss)
         val_dice_score = np.mean(dice_score)
         val_jaccard_score = np.mean(jaccard_score)
+        self.log({'val_loss' : val_loss, 'val_dice_score' : val_dice_score, 'val_jaccard_score' : val_jaccard_score})
         print({'val_loss' : val_loss, 'val_dice_score' : val_dice_score, 'val_jaccard_score' : val_jaccard_score})
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description='Train MedSAM Lite model')
-parser.add_argument('--batch_size', type=int, default=1, help='Batch size for training')
-parser.add_argument('--learning_rate', type=float, default=0.00005, help='Learning rate for training')
+parser.add_argument('--batch_size', type=int, default=8, help='Batch size for training')
+parser.add_argument('--learning_rate', type=float, default=0.0005, help='Learning rate for training')
 parser.add_argument('--rank', type=int, default=32, help='Rank for LoraConfig')
 parser.add_argument('--alpha', type=int, default=32, help='Alpha for LoraConfig')
 parser.add_argument('--dropout', type=float, default=0.1, help='Dropout for LoraConfig')
 parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs')
 parser.add_argument('--use_rlora', type=bool, default=True, help='Use RLORA in LoraConfig')
-
+parser.add_argument('--eval_steps', type=int, default=10, help='Number of steps to evaluate the model')
+parser.add_argument('--gradient_accumulation_steps', type=int, default=8, help='Number of gradient accumulation steps')
 args = parser.parse_args()
 
 print("Data Loading Intialized.")
@@ -352,7 +354,7 @@ model = MedSAM_Lite(
 )
 
 lite_medsam_checkpoint_path = os.path.join(os.getcwd(), 'lite_medsam.pth')
-lite_medsam_checkpoint = torch.load(lite_medsam_checkpoint_path, map_location='cuda')
+lite_medsam_checkpoint = torch.load(lite_medsam_checkpoint_path, map_location='cpu')
 model.load_state_dict(lite_medsam_checkpoint)
 
 # Use the arguments in the script
@@ -363,7 +365,8 @@ ALPHA = args.alpha
 DROPOUT = args.dropout
 EPOCHS = args.epochs
 USE_RLORA = args.use_rlora
-# EVAL_STEPS = args.eval_steps
+EVAL_STEPS = args.eval_steps
+GRADIENT_ACCUMULATION_STEPS = args.gradient_accumulation_steps
 
 train_dataset = npyDataset(folder='train')
 val_dataset = npyDataset(folder='val')
@@ -374,11 +377,12 @@ lora_config = LoraConfig(
     lora_dropout=DROPOUT,
     bias="lora_only",
     use_rslora=USE_RLORA,
-    target_modules=["q_proj", "v_proj"], # train only q_proj and v_proj in mask decoder
+    target_modules=["qkv, q_proj", "v_proj"], # train only q_proj and v_proj in mask decoder
 )
 
 model = get_peft_model(model, lora_config)
 print_trainable_parameters(model)
+print(model.state_dict().keys())
 model.train()
 print("Model Loading Successful.")
 
@@ -391,12 +395,12 @@ training_args = TrainingArguments(
     per_device_train_batch_size=BATCH_SIZE,
     per_device_eval_batch_size=BATCH_SIZE,
     save_total_limit=10,
-    evaluation_strategy="epoch",
-    #eval_steps = EVAL_STEPS,
+    evaluation_strategy="steps",
+    eval_steps = EVAL_STEPS,
     save_strategy="epoch",
     logging_steps=10,
     push_to_hub=False,
-    gradient_accumulation_steps=50,
+    gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
 )   
 
 trainer = SegmentationTrainer(
