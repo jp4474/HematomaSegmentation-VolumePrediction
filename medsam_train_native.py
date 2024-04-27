@@ -354,7 +354,13 @@ model = MedSAM_Lite(
 )
 
 lite_medsam_checkpoint_path = os.path.join(os.getcwd(), 'lite_medsam.pth')
-lite_medsam_checkpoint = torch.load(lite_medsam_checkpoint_path, map_location='cuda')
+
+if torch.cuda.is_available():
+    device = 'cuda'
+else:
+    device = 'cpu'
+    
+lite_medsam_checkpoint = torch.load(lite_medsam_checkpoint_path, map_location=device)
 model.load_state_dict(lite_medsam_checkpoint)
 
 # Use the arguments in the script
@@ -399,6 +405,7 @@ training_args = TrainingArguments(
     save_strategy="epoch",
     logging_steps=10,
     push_to_hub=False,
+    lr_scheduler_type="cosine",
     gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
 )   
 
