@@ -354,7 +354,7 @@ model = MedSAM_Lite(
 )
 
 lite_medsam_checkpoint_path = os.path.join(os.getcwd(), 'lite_medsam.pth')
-lite_medsam_checkpoint = torch.load(lite_medsam_checkpoint_path, map_location='cpu')
+lite_medsam_checkpoint = torch.load(lite_medsam_checkpoint_path, map_location='cuda')
 model.load_state_dict(lite_medsam_checkpoint)
 
 # Use the arguments in the script
