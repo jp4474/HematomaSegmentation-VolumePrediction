@@ -382,7 +382,6 @@ lora_config = LoraConfig(
 
 model = get_peft_model(model, lora_config)
 print_trainable_parameters(model)
-print(model.state_dict().keys())
 model.train()
 print("Model Loading Successful.")
 
