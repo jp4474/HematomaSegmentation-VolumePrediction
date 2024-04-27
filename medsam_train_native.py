@@ -1,23 +1,13 @@
 import os
-import glob
-from monai.losses import GeneralizedDiceFocalLoss
 import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
-from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.data import Dataset
 from torchmetrics.classification import BinaryJaccardIndex, Dice
-from peft import LoraConfig, get_peft_model, LoraModel
-from sklearn.model_selection import train_test_split
+from peft import LoraConfig, get_peft_model
 from tqdm import tqdm
-# from segment_anything import sam_model_registry
-from transformers import SamModel, SamProcessor, TrainingArguments, Trainer
-from datasets import load_metric
-import evaluate
-from pathlib import Path
-import nibabel as nib
+from transformers import TrainingArguments, Trainer
 import numpy as np
 import cv2
 import argparse
@@ -204,14 +194,9 @@ class npyDataset(Dataset):
         img_file_name = self.imgs[index]
         img = np.load(os.path.join(self.imgs_path, img_file_name), allow_pickle=True)
 
-        img_256 = resize_longest_side(img, 256) # <- resize by stetching or smt
-        # img_256_norm = (img_256 - img_256.min()) / np.clip(
-        #     img_256.max() - img_256.min(), a_min=1e-8, a_max=None
-        # )
-        #img_256_padded = pad_image(img_256, 256) # <- resize padding 0s
-        img_256_tensor = torch.tensor(img_256).float().permute(2, 1, 0) #.unsqueeze(0)
+        img_256 = resize_longest_side(img, 256)
+        img_256_tensor = torch.tensor(img_256).float().permute(2, 1, 0)
 
-        #gt_file_name = self.gts[index]
         gt = np.load(os.path.join(self.gts_path, img_file_name), allow_pickle=True)
         gt[gt > 0] = 1
         gt = resize_longest_side(gt, 256) # 512 -> 256
@@ -252,15 +237,6 @@ def compute_metrics(outputs):
 
 
 def loss_function(logits, true_masks):
-    # def dice_loss(pred,target):
-    #     numerator = 2 * torch.sum(pred * target)
-    #     denominator = torch.sum(pred + target)
-    #     return 1 - (numerator + 1) / (denominator + 1)
-    
-    # pred = nn.Sigmoid()(logits)
-    # pred[pred > 0.5] = 1
-    # pred[pred <= 0.5] = 0
-    # return dice_loss(pred, true_masks)   
     return nn.BCEWithLogitsLoss()(logits, true_masks)
 
 class SegmentationTrainer(Trainer):
@@ -275,17 +251,13 @@ class SegmentationTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False):
         outputs = model(**inputs)
         logits = outputs['low_res_masks']
-        masks = outputs['ground_truth_masks']
-        logits = model.postprocess_masks(logits, (256, 256), (masks.shape[2], masks.shape[3])) #.squeeze(1)
-        
+        masks = outputs['ground_truth_masks']        
         masks.requires_grad = True
-
-        loss = loss_function(logits, masks) #self.loss_fn(logits, masks) 
-        #logits.requires_grad = True
+        loss = loss_function(logits, masks)
         outputs = {'logits' : logits, 'masks' : masks}
-        metrics = compute_metrics(outputs)
-        metrics = {'train_' + key: value for key, value in metrics.items()}
-        self.log(metrics)
+        # metrics = compute_metrics(outputs)
+        # metrics = {'train_' + key: value for key, value in metrics.items()}
+        # self.log(metrics)
         return (loss, outputs) if return_outputs else loss
     
     def evaluate(
@@ -294,8 +266,6 @@ class SegmentationTrainer(Trainer):
         ignore_keys = None,
         metric_key_prefix: str = "eval",
     ):
-        # memory metrics - must set up as early as possible
-        # self._memory_tracker.start()
         eval_dataloader = self.get_eval_dataloader(eval_dataset)
 
         self.model.eval()
@@ -329,7 +299,6 @@ parser.add_argument('--alpha', type=int, default=32, help='Alpha for LoraConfig'
 parser.add_argument('--dropout', type=float, default=0.1, help='Dropout for LoraConfig')
 parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs')
 parser.add_argument('--use_rlora', type=bool, default=True, help='Use RLORA in LoraConfig')
-# parser.add_argument('--eval_steps', type=int, default=10, help='Number of eval steps')
 
 args = parser.parse_args()
 
@@ -383,7 +352,7 @@ model = MedSAM_Lite(
 )
 
 lite_medsam_checkpoint_path = os.path.join(os.getcwd(), 'lite_medsam.pth')
-lite_medsam_checkpoint = torch.load(lite_medsam_checkpoint_path, map_location='cpu')
+lite_medsam_checkpoint = torch.load(lite_medsam_checkpoint_path, map_location='cuda')
 model.load_state_dict(lite_medsam_checkpoint)
 
 # Use the arguments in the script
@@ -427,7 +396,7 @@ training_args = TrainingArguments(
     save_strategy="epoch",
     logging_steps=10,
     push_to_hub=False,
-    gradient_accumulation_steps=50
+    gradient_accumulation_steps=50,
 )   
 
 trainer = SegmentationTrainer(
@@ -439,4 +408,3 @@ trainer = SegmentationTrainer(
 )
 
 trainer.train()
-#trainer.evaluate()
