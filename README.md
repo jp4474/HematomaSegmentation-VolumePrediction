@@ -1,5 +1,30 @@
 # HematomaSegmentation-VolumePrediction
 
+## Folder Structure 
+Folder structure for data
+```bash
+└── data
+    ├── divide.sh
+    ├── img_test
+    ├── img_train
+    ├── img_train_pathes.txt // file names for img train
+    ├── img_val
+    ├── img_val_pathes.txt // file names for img val
+    ├── mask_test
+    ├── mask_train
+    ├── mask_train_pathes.txt // file names for mask train
+    ├── mask_val
+    ├── mask_val_pathes.txt // file names for mask val
+    ├── train_final_npy
+    │   ├── gts
+    │   └── imgs
+    ├── val_final_npy
+    │   ├── gts
+    │   └── imgs
+    └──train_final_npy
+    ├── gts
+    └── imgs
+```
 ## Preprocessing
 Run the pre-processing script to convert the dataset (nii.gz files and npy files) to npz format:
 
@@ -8,11 +33,11 @@ python pre_CT_MR.py `
     -img_path img_train `
     -img_name_suffix .nii.gz `
     -gt_path mask_train `
-    -gt_name_suffix .npy `
+    -gt_name_suffix .npy ` // expects npy extension but the script can be modified to take in .nii.gz
     -output_path train_final_npz `
     -num_workers 4 `
-    -modality CT `
-    -anatomy Brain `
+    -modality CT ` // the script is only viable for CT modality. Modify the if-else statement in the script for other modalities 
+    -anatomy Brain ` 
     -window_level 65 `
     -window_width 70 `
     --save_nii
