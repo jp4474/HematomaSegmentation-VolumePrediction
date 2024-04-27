@@ -12,8 +12,6 @@ do
   fi
 done
 
-# Your existing code follows here...
-
 while IFS= read -r file
 do
   mv "data/img_train_val/$file" "data/img_train/$file"

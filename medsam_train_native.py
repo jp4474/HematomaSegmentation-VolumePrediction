@@ -15,12 +15,16 @@ from tiny_vit_sam import TinyViT
 from segment_anything.modeling import MaskDecoder, PromptEncoder, TwoWayTransformer
 from transformers.utils import logging
 
+
+# Set the device to CUDA
 os.environ['PJRT_DEVICE'] = 'CUDA'
 
+# Set logging level to info
 logging.set_verbosity_info()
 logger = logging.get_logger("transformers")
 
 
+# Function to get bounding box coordinates from the mask
 def get_bbox256(mask_256, bbox_shift=3):
     """
     Get the bounding box coordinates from the mask (256x256)
@@ -53,6 +57,8 @@ def get_bbox256(mask_256, bbox_shift=3):
     bboxes256 = np.array([x_min, y_min, x_max, y_max])
 
     return bboxes256
+
+# Function to rescale bounding box to the coordinates of the resized image
 def resize_box_to_256(box, original_size):
     """
     the input bounding box is obtained from the original image
@@ -77,6 +83,7 @@ def resize_box_to_256(box, original_size):
 
     return new_box
 
+# Function to resize image to target_length while keeping the aspect ratio
 def resize_longest_side(image, target_length=256):
     """
     Resize image to target_length while keeping the aspect ratio
@@ -90,6 +97,7 @@ def resize_longest_side(image, target_length=256):
 
     return cv2.resize(image, target_size, interpolation=cv2.INTER_AREA)
 
+# Function to pad image to target_size
 def pad_image(image, target_size=256):
     """
     Pad image to target_size
@@ -106,6 +114,7 @@ def pad_image(image, target_size=256):
 
     return image_padded
 
+# MedSAM_Lite model class
 class MedSAM_Lite(nn.Module):
     def __init__(
             self, 
@@ -173,7 +182,7 @@ class MedSAM_Lite(nn.Module):
         return masks
     
 
-    
+# Dataset class for numpy arrays
 class npyDataset(Dataset):    
     def __init__(self, data_root_folder = 'data', folder = 'train', n_sample=None):
         self.main_folder = os.path.join(data_root_folder, folder)
@@ -213,7 +222,7 @@ class npyDataset(Dataset):
     def __len__(self):
         return len(self.imgs)
 
-
+# Function to print trainable parameters
 def print_trainable_parameters(model):
     trainable_params = 0
     all_param = 0
@@ -225,6 +234,8 @@ def print_trainable_parameters(model):
         f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param:.2f}"
     )
 
+
+# Function to compute metrics
 def compute_metrics(outputs):
     with torch.no_grad():
         dice_metric = Dice().to(outputs['logits'].device)
@@ -235,10 +246,11 @@ def compute_metrics(outputs):
         return {'dice_metric' : dice_metric(logits, masks).item(), 
                 'jaccard_metric' : jaccard_metric(logits, masks).item()}
 
-
+# Loss function
 def loss_function(logits, true_masks):
     return nn.BCEWithLogitsLoss()(logits, true_masks)
 
+# HuggingFace Custom Trainer Class
 class SegmentationTrainer(Trainer):
     def __init__(self, model, compute_metrics, args, train_dataset, eval_dataset):
         super().__init__(model, args)
@@ -255,9 +267,6 @@ class SegmentationTrainer(Trainer):
         masks.requires_grad = True
         loss = loss_function(logits, masks)
         outputs = {'logits' : logits, 'masks' : masks}
-        #metrics = compute_metrics(outputs)
-        # metrics = {'train_' + key: value for key, value in metrics.items()}
-        #self.log(metrics)
         return (loss, outputs) if return_outputs else loss
     
     def evaluate(
@@ -304,7 +313,17 @@ parser.add_argument('--eval_steps', type=int, default=10, help='Number of steps 
 parser.add_argument('--gradient_accumulation_steps', type=int, default=8, help='Number of gradient accumulation steps')
 args = parser.parse_args()
 
-print("Data Loading Intialized.")
+BATCH_SIZE = args.batch_size
+LEARNING_RATE = args.learning_rate
+RANK = args.rank
+ALPHA = args.alpha
+DROPOUT = args.dropout
+EPOCHS = args.epochs
+USE_RLORA = args.use_rlora
+EVAL_STEPS = args.eval_steps
+GRADIENT_ACCUMULATION_STEPS = args.gradient_accumulation_steps
+
+logger.info("Model Loading Intialized.")
 
 medsam_lite_image_encoder = TinyViT(
     img_size=256,
@@ -363,33 +382,26 @@ else:
 lite_medsam_checkpoint = torch.load(lite_medsam_checkpoint_path, map_location=device)
 model.load_state_dict(lite_medsam_checkpoint)
 
-# Use the arguments in the script
-BATCH_SIZE = args.batch_size
-LEARNING_RATE = args.learning_rate
-RANK = args.rank
-ALPHA = args.alpha
-DROPOUT = args.dropout
-EPOCHS = args.epochs
-USE_RLORA = args.use_rlora
-EVAL_STEPS = args.eval_steps
-GRADIENT_ACCUMULATION_STEPS = args.gradient_accumulation_steps
-
-train_dataset = npyDataset(folder='train')
-val_dataset = npyDataset(folder='val')
-
 lora_config = LoraConfig(
     r=RANK,
     lora_alpha=ALPHA,
     lora_dropout=DROPOUT,
     bias="lora_only",
     use_rslora=USE_RLORA,
-    target_modules=["qkv, q_proj", "v_proj"], # train only q_proj and v_proj in mask decoder
+    target_modules=["qkv, q_proj", "v_proj"], 
 )
 
 model = get_peft_model(model, lora_config)
 print_trainable_parameters(model)
 model.train()
-print("Model Loading Successful.")
+
+logger.info("Model Loading Successful.")
+logger.info("Data Loading Initialized.")
+
+train_dataset = npyDataset(folder='train')
+val_dataset = npyDataset(folder='val')
+
+logger.info("Data Loading Successful.")
 
 model_name = 'LiteMedSAM'
 
@@ -418,3 +430,5 @@ trainer = SegmentationTrainer(
 )
 
 trainer.train()
+
+logger.info("Training Completed.")

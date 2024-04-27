@@ -12,6 +12,7 @@ from transformers import AutoConfig
 from peft import LoftQConfig, LoraConfig, get_peft_model
 from medsam_train_native import npyDataset
 
+# Function to calculate Dice coefficient
 def dice_coeff_binary(y_pred, y_true):
     """Values must be only zero or one."""
     eps = 0.0001
@@ -19,6 +20,7 @@ def dice_coeff_binary(y_pred, y_true):
     union = y_pred.float().sum() + y_true.float().sum()
     return ((2 * inter.float() + eps) / (union.float() + eps))
 
+# Function to visualize the image, mask, and prediction
 def visualize_pred(img, mask, pred):
     # Flatten the mask and prediction arrays for score calculations
     dice = Dice()
