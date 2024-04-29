@@ -388,7 +388,7 @@ lora_config = LoraConfig(
     lora_dropout=DROPOUT,
     bias="lora_only",
     use_rslora=USE_RLORA,
-    target_modules=["qkv, q_proj", "v_proj"], 
+    target_modules=["qkv", "q_proj", "v_proj"], 
 )
 
 model = get_peft_model(model, lora_config)
