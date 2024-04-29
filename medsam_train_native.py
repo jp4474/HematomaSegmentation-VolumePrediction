@@ -393,42 +393,42 @@ lora_config = LoraConfig(
 
 model = get_peft_model(model, lora_config)
 print_trainable_parameters(model)
-model.train()
+# model.train()
 
-logger.info("Model Loading Successful.")
-logger.info("Data Loading Initialized.")
+# logger.info("Model Loading Successful.")
+# logger.info("Data Loading Initialized.")
 
-train_dataset = npyDataset(folder='train')
-val_dataset = npyDataset(folder='val')
+# train_dataset = npyDataset(folder='train')
+# val_dataset = npyDataset(folder='val')
 
-logger.info("Data Loading Successful.")
+# logger.info("Data Loading Successful.")
 
-model_name = 'LiteMedSAM'
+# model_name = 'LiteMedSAM'
 
-training_args = TrainingArguments(
-    output_dir=f"{model_name}-lora_{RANK}_{ALPHA}",
-    learning_rate= LEARNING_RATE,
-    num_train_epochs=EPOCHS,
-    per_device_train_batch_size=BATCH_SIZE,
-    per_device_eval_batch_size=BATCH_SIZE,
-    save_total_limit=10,
-    evaluation_strategy="steps",
-    eval_steps = EVAL_STEPS,
-    save_strategy="epoch",
-    logging_steps=10,
-    push_to_hub=False,
-    lr_scheduler_type="cosine",
-    gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
-)   
+# training_args = TrainingArguments(
+#     output_dir=f"{model_name}-lora_r{RANK}_a{ALPHA}_d{DROPOUT}",
+#     learning_rate= LEARNING_RATE,
+#     num_train_epochs=EPOCHS,
+#     per_device_train_batch_size=BATCH_SIZE,
+#     per_device_eval_batch_size=BATCH_SIZE,
+#     save_total_limit=10,
+#     evaluation_strategy="steps",
+#     eval_steps = EVAL_STEPS,
+#     save_strategy="epoch",
+#     logging_steps=10,
+#     push_to_hub=False,
+#     lr_scheduler_type="cosine",
+#     gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
+# )   
 
-trainer = SegmentationTrainer(
-    model=model,
-    args=training_args,
-    train_dataset=train_dataset,
-    eval_dataset=val_dataset,
-    compute_metrics=compute_metrics,
-)
+# trainer = SegmentationTrainer(
+#     model=model,
+#     args=training_args,
+#     train_dataset=train_dataset,
+#     eval_dataset=val_dataset,
+#     compute_metrics=compute_metrics,
+# )
 
-trainer.train()
+# trainer.train()
 
-logger.info("Training Completed.")
+# logger.info("Training Completed.")
