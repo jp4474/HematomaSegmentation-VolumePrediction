@@ -14,14 +14,7 @@ import argparse
 from tiny_vit_sam import TinyViT
 from segment_anything.modeling import MaskDecoder, PromptEncoder, TwoWayTransformer
 from transformers.utils import logging
-
-
-# Set the device to CUDA
-os.environ['PJRT_DEVICE'] = 'CUDA'
-
-# Set logging level to info
-logging.set_verbosity_info()
-logger = logging.get_logger("transformers")
+import subprocess
 
 
 # Function to get bounding box coordinates from the mask
@@ -261,6 +254,7 @@ class SegmentationTrainer(Trainer):
         self.compute_metrics = compute_metrics
     
     def compute_loss(self, model, inputs, return_outputs=False):
+        self.model.train()
         outputs = model(**inputs)
         logits = outputs['low_res_masks']
         masks = outputs['ground_truth_masks']        
@@ -277,22 +271,22 @@ class SegmentationTrainer(Trainer):
     ):
         eval_dataloader = self.get_eval_dataloader(eval_dataset)
 
-        self.model.eval()
         val_loss = []
         dice_score = []
         jaccard_score = []
 
-        for i, batch in enumerate(tqdm(eval_dataloader)):
-            outputs = model(**batch)
-            logits = outputs['low_res_masks']
-            masks = outputs['ground_truth_masks']
-            masks = outputs['ground_truth_masks']
-            loss = loss_function(logits, masks)
-            outputs = {'logits' : logits, 'masks' : masks}
-            metrics = compute_metrics(outputs)
-            val_loss.append(loss.item())
-            dice_score.append(metrics['dice_metric'])
-            jaccard_score.append(metrics['jaccard_metric'])
+        self.model.eval()
+        with torch.no_grad():
+            for i, batch in enumerate(tqdm(eval_dataloader)):
+                outputs = model(**batch)
+                logits = outputs['low_res_masks']
+                masks = outputs['ground_truth_masks']
+                loss = loss_function(logits, masks)
+                outputs = {'logits' : logits, 'masks' : masks}
+                metrics = compute_metrics(outputs)
+                val_loss.append(loss.item())
+                dice_score.append(metrics['dice_metric'])
+                jaccard_score.append(metrics['jaccard_metric'])
         
         val_loss = np.mean(val_loss)
         val_dice_score = np.mean(dice_score)
@@ -305,13 +299,24 @@ parser = argparse.ArgumentParser(description='Train MedSAM Lite model')
 parser.add_argument('--batch_size', type=int, default=8, help='Batch size for training')
 parser.add_argument('--learning_rate', type=float, default=0.0005, help='Learning rate for training')
 parser.add_argument('--rank', type=int, default=32, help='Rank for LoraConfig')
-parser.add_argument('--alpha', type=int, default=32, help='Alpha for LoraConfig')
+parser.add_argument('--alpha', type=int, default=64, help='Alpha for LoraConfig')
 parser.add_argument('--dropout', type=float, default=0.1, help='Dropout for LoraConfig')
 parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs')
 parser.add_argument('--use_rlora', type=bool, default=True, help='Use RLORA in LoraConfig')
 parser.add_argument('--eval_steps', type=int, default=10, help='Number of steps to evaluate the model')
 parser.add_argument('--gradient_accumulation_steps', type=int, default=8, help='Number of gradient accumulation steps')
 args = parser.parse_args()
+
+# Set environment variable for PJRT
+if torch.cuda.is_available():
+    if torch.version.cuda == '11.8':
+        os.environ["PJRT_DEVICE"] = "GPU" ## For CUDA 11.1
+    else:
+        os.environ["PJRT_DEVICE"] = "CUDA"
+
+# Set logging level to info
+logging.set_verbosity_info()
+logger = logging.get_logger("transformers")
 
 BATCH_SIZE = args.batch_size
 LEARNING_RATE = args.learning_rate
@@ -407,7 +412,7 @@ model_name = 'LiteMedSAM'
 
 training_args = TrainingArguments(
     output_dir=f"{model_name}-lora_r{RANK}_a{ALPHA}_d{DROPOUT}",
-    learning_rate= LEARNING_RATE,
+    learning_rate=LEARNING_RATE,
     num_train_epochs=EPOCHS,
     per_device_train_batch_size=BATCH_SIZE,
     per_device_eval_batch_size=BATCH_SIZE,
