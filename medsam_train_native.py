@@ -1,74 +1,221 @@
 import os
-from monai.losses import GeneralizedDiceFocalLoss
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR
-from torch.utils.data import Dataset, DataLoader, random_split
+import torch.nn as nn
+from torch.utils.data import Dataset
 from torchmetrics.classification import BinaryJaccardIndex, Dice
 from peft import LoraConfig, get_peft_model
 from tqdm import tqdm
-# from segment_anything import sam_model_registry
-from transformers import SamModel, SamProcessor
+from transformers import TrainingArguments, Trainer
+import numpy as np
+import cv2
+import argparse
+from tiny_vit_sam import TinyViT
+from segment_anything.modeling import MaskDecoder, PromptEncoder, TwoWayTransformer
+from transformers.utils import logging
+import subprocess
 
-class BraTSDataset(Dataset):    
-    def __init__(self, data_root_folder, folder = '', n_sample=None):
-        main_folder = os.path.join(data_root_folder, folder)
-        self.folder_path = os.path.join(main_folder, 'slice')
-        self.file_names = [f for f in os.listdir(self.folder_path)] #if f.endswith('.npy')]
-        #self.file_names = sorted(os.listdir(self.folder_path))[:n_sample]
 
-    def __getitem__(self, index):
-        file_name = self.file_names[index]
-        sample = np.load(os.path.join(self.folder_path, file_name), allow_pickle=True)
-        #eps = 0.0001
-        img = sample[0,:,:]
-        #img = img.resize((256, 256)) 
-        diff = np.subtract(img.max(), img.min(), dtype=np.float64)
-        denom = np.clip(diff, a_min=1e-8, a_max=None)
-        img = (img - img.min()) / denom
-        mask = sample[1, :, :]
-        #mask= mask.resize((256, 256)) 
-        mask[mask > 0] = 1
-        mask[mask == 0] = 0
-        
-        gt2D = np.uint8(
-            mask == 1
+# Function to get bounding box coordinates from the mask
+def get_bbox256(mask_256, bbox_shift=3):
+    """
+    Get the bounding box coordinates from the mask (256x256)
+
+    Parameters
+    ----------
+    mask_256 : numpy.ndarray
+        the mask of the resized image
+
+    bbox_shift : int
+        Add perturbation to the bounding box coordinates
+    
+    Returns
+    -------
+    numpy.ndarray
+        bounding box coordinates in the resized image
+    """
+    y_indices, x_indices = np.where(mask_256 > 0)
+    
+    x_min, x_max = np.min(x_indices), np.max(x_indices)
+    y_min, y_max = np.min(y_indices), np.max(y_indices)
+    # add perturbation to bounding box coordinates and test the robustness
+    # this can be removed if you do not want to test the robustness
+    H, W = mask_256.shape
+    x_min = max(0, x_min - bbox_shift)
+    x_max = min(W, x_max + bbox_shift)
+    y_min = max(0, y_min - bbox_shift)
+    y_max = min(H, y_max + bbox_shift)
+
+    bboxes256 = np.array([x_min, y_min, x_max, y_max])
+
+    return bboxes256
+
+# Function to rescale bounding box to the coordinates of the resized image
+def resize_box_to_256(box, original_size):
+    """
+    the input bounding box is obtained from the original image
+    here, we rescale it to the coordinates of the resized image
+
+    Parameters
+    ----------
+    box : numpy.ndarray
+        bounding box coordinates in the original image
+    original_size : tuple
+        the original size of the image
+
+    Returns
+    -------
+    numpy.ndarray
+        bounding box coordinates in the resized image
+    """
+    new_box = np.zeros_like(box)
+    ratio = 256 / max(original_size)
+    for i in range(len(box)):
+        new_box[i] = int(box[i] * ratio)
+
+    return new_box
+
+# Function to resize image to target_length while keeping the aspect ratio
+def resize_longest_side(image, target_length=256):
+    """
+    Resize image to target_length while keeping the aspect ratio
+    Expects a numpy array with shape HxWxC in uint8 format.
+    """
+    oldh, oldw = image.shape[0], image.shape[1]
+    scale = target_length * 1.0 / max(oldh, oldw)
+    newh, neww = oldh * scale, oldw * scale
+    neww, newh = int(neww + 0.5), int(newh + 0.5)
+    target_size = (neww, newh)
+
+    return cv2.resize(image, target_size, interpolation=cv2.INTER_AREA)
+
+# Function to pad image to target_size
+def pad_image(image, target_size=256):
+    """
+    Pad image to target_size
+    Expects a numpy array with shape HxWxC in uint8 format.
+    """
+    # Pad
+    h, w = image.shape[0], image.shape[1]
+    padh = target_size - h
+    padw = target_size - w
+    if len(image.shape) == 3: ## Pad image
+        image_padded = np.pad(image, ((0, padh), (0, padw), (0, 0)))
+    else: ## Pad gt mask
+        image_padded = np.pad(image, ((0, padh), (0, padw)))
+
+    return image_padded
+
+# MedSAM_Lite model class
+class MedSAM_Lite(nn.Module):
+    def __init__(
+            self, 
+            image_encoder, 
+            mask_decoder,
+            prompt_encoder
+        ):
+        super().__init__()
+        self.image_encoder = image_encoder
+        self.mask_decoder = mask_decoder
+        self.prompt_encoder = prompt_encoder
+
+    def forward(self, image, box_np, mask):
+        image_embedding = self.image_encoder(image) # (B, 256, 64, 64)
+        # do not compute gradients for prompt encoder
+        with torch.no_grad():
+            box_torch = torch.as_tensor(box_np, dtype=torch.float32, device=image.device)
+            if len(box_torch.shape) == 2:
+                box_torch = box_torch[:, None, :] # (B, 1, 4)
+
+        sparse_embeddings, dense_embeddings = self.prompt_encoder(
+            points=None,
+            boxes=box_np,
+            masks=None,
+        )
+        low_res_masks, iou_predictions = self.mask_decoder(
+            image_embeddings=image_embedding, # (B, 256, 64, 64)
+            image_pe=self.prompt_encoder.get_dense_pe(), # (1, 256, 64, 64)
+            sparse_prompt_embeddings=sparse_embeddings, # (B, 2, 256)
+            dense_prompt_embeddings=dense_embeddings, # (B, 256, 64, 64)
+            multimask_output=False,
+          ) # (B, 1, 256, 256)
+
+        return {'low_res_masks' : low_res_masks, 'ground_truth_masks' : mask}
+
+    @torch.no_grad()
+    def postprocess_masks(self, masks, new_size, original_size):
+        """
+        Do cropping and resizing
+
+        Parameters
+        ----------
+        masks : torch.Tensor
+            masks predicted by the model
+        new_size : tuple
+            the shape of the image after resizing to the longest side of 256
+        original_size : tuple
+            the original shape of the image
+
+        Returns
+        -------
+        torch.Tensor
+            the upsampled mask to the original size
+        """
+        # Crop
+        #masks = masks[..., :new_size[0], :new_size[1]]
+        # Resize
+        masks = F.interpolate(
+            masks,
+            size=(original_size[0], original_size[1]),
+            mode="bilinear",
+            align_corners=False,
         )
 
-        y_indices, x_indices = np.where(gt2D >= 0)  #
-        x_min, x_max = np.min(x_indices), np.max(x_indices)
-        y_min, y_max = np.min(y_indices), np.max(y_indices)
-        H, W = gt2D.shape
-        x_min = max(0, x_min) #- random.randint(0, self.bbox_shift))
-        x_max = min(W, x_max) #+ random.randint(0, self.bbox_shift))
-        y_min = max(0, y_min) #- random.randint(0, self.bbox_shift))
-        y_max = min(H, y_max) #+ random.randint(0, self.bbox_shift))
-        
-        bboxes = np.array([x_min, y_min, x_max, y_max])
-        
-        img_as_tensor = np.expand_dims(img, axis=0)
-        img_as_tensor = np.repeat(img_as_tensor, 3, axis=0)
-
-        mask_as_tensor = np.expand_dims(mask, axis=0)
-        bboxes_as_tensor = np.expand_dims(bboxes, axis=0)
-
-        img_as_tensor = torch.from_numpy(img_as_tensor)
-        mask_as_tensor = torch.from_numpy(mask_as_tensor)
-        bboxes_as_tensor = torch.from_numpy(bboxes_as_tensor)
-        
-        #return img_as_tensor, mask_as_tensor
-        return {
-            'image': img_as_tensor.to(dtype=torch.float32),
-            'mask': mask_as_tensor.to(dtype=torch.int64),
-            'box' : bboxes_as_tensor.to(dtype=torch.float32),
-            'img_id': file_name
-        }
-        
-    def __len__(self):
-        return len(self.file_names)
+        return masks
     
+
+# Dataset class for numpy arrays
+class npyDataset(Dataset):    
+    def __init__(self, data_root_folder = 'data', folder = 'train', n_sample=None):
+        self.main_folder = os.path.join(data_root_folder, folder)
+        self.imgs_path = os.path.join(data_root_folder, folder + '_final_npy/imgs')
+        self.gts_path = os.path.join(data_root_folder, folder + '_final_npy/gts')
+        temp1 =  [f for f in os.listdir(self.imgs_path) if f.endswith('.npy')]
+        temp2 =  [f for f in os.listdir(self.gts_path) if f.endswith('.npy')]
+        if n_sample is not None:
+            self.imgs = sorted(temp1)[:n_sample]
+            self.gts = sorted(temp2)[:n_sample]
+        else:
+            self.imgs = sorted(temp1)
+            self.gts = sorted(temp2)
+
+        assert len(self.imgs) == len(self.gts), "Number of images and masks should be same."
+
+    def __getitem__(self, index):
+        img_file_name = self.imgs[index]
+        img = np.load(os.path.join(self.imgs_path, img_file_name), allow_pickle=True)
+
+        img_256 = resize_longest_side(img, 256)
+        img_256_tensor = torch.tensor(img_256).float().permute(2, 1, 0)
+
+        gt = np.load(os.path.join(self.gts_path, img_file_name), allow_pickle=True)
+        gt[gt > 0] = 1
+        gt = resize_longest_side(gt, 256) # 512 -> 256
+        gt_tensor = torch.from_numpy(gt).float().unsqueeze(0) # 512, 512
+        box512 = get_bbox256(gt)
+        box256 = resize_box_to_256(box512, original_size=(256, 256))
+        box256 = box256[None, ...] # (1, 4)
+        return {
+            'image': img_256_tensor,
+            'mask': gt_tensor,
+            'box_np': box256
+        }
+ 
+    def __len__(self):
+        return len(self.imgs)
+
+# Function to print trainable parameters
 def print_trainable_parameters(model):
     trainable_params = 0
     all_param = 0
@@ -79,116 +226,214 @@ def print_trainable_parameters(model):
     print(
         f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param:.2f}"
     )
+
+
+# Function to compute metrics
+def compute_metrics(outputs):
+    with torch.no_grad():
+        dice_metric = Dice().to(outputs['logits'].device)
+        jaccard_metric = BinaryJaccardIndex().to(outputs['logits'].device)
+
+        logits, masks = outputs['logits'], outputs['masks'].int()
+
+        return {'dice_metric' : dice_metric(logits, masks).item(), 
+                'jaccard_metric' : jaccard_metric(logits, masks).item()}
+
+# Loss function
+def loss_function(logits, true_masks):
+    return nn.BCEWithLogitsLoss()(logits, true_masks)
+
+# HuggingFace Custom Trainer Class
+class SegmentationTrainer(Trainer):
+    def __init__(self, model, compute_metrics, args, train_dataset, eval_dataset):
+        super().__init__(model, args)
+        self.model = model
+        self.args = args
+        self.train_dataset = train_dataset
+        self.eval_dataset = eval_dataset
+        self.compute_metrics = compute_metrics
     
-
-if __name__ == "__main__":
-    print("Data Loading Intialized.")
+    def compute_loss(self, model, inputs, return_outputs=False):
+        self.model.train()
+        outputs = model(**inputs)
+        logits = outputs['low_res_masks']
+        masks = outputs['ground_truth_masks']        
+        masks.requires_grad = True
+        loss = loss_function(logits, masks)
+        outputs = {'logits' : logits, 'masks' : masks}
+        return (loss, outputs) if return_outputs else loss
     
-    BATCH_SIZE = 2
+    def evaluate(
+        self,
+        eval_dataset = None,
+        ignore_keys = None,
+        metric_key_prefix: str = "eval",
+    ):
+        eval_dataloader = self.get_eval_dataloader(eval_dataset)
 
-    data_root_folder = '/mnt/disks/disk_dir/full_raw - Copy/'
-    train_dataset = BraTSDataset(data_root_folder, 'train')
-    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, pin_memory=True, num_workers=4) 
-    val_dataset = BraTSDataset(data_root_folder, 'val')
-    val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, pin_memory=True, num_workers=4) 
-    print("Data Loading Successful.")
+        val_loss = []
+        dice_score = []
+        jaccard_score = []
 
-    #test_dataset = BraTSDataset(data_root_folder, 'test')
-    #test_dataloader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, pin_memory=e, num_workers=4)
-
-    peft_config = LoraConfig(
-        r=16,
-        lora_alpha=32,
-        lora_dropout=0.1,
-        bias="lora_only",
-        target_modules=["qkv", "q_proj", "v_proj"],
-    )
-
-    device = "cuda:0"
-
-    processor = SamProcessor.from_pretrained("wanglab/medsam-vit-base") #.to(device)
-    model = SamModel.from_pretrained("wanglab/medsam-vit-base")
-    dice_metric = Dice().to(device)
-    jaccard_metric = BinaryJaccardIndex().to(device)
-    lr = 1e-3
-    loss_fn = GeneralizedDiceFocalLoss(sigmoid=False).to(device)
-    model = get_peft_model(model, peft_config)
-    model = model.to(device)
-    optimizer = AdamW(model.parameters(), lr=lr)
-    print("Model Loading Successful.")
-
-    print_trainable_parameters(model)
-
-    train_dice_score = []
-    train_jaccard_score = []
-    train_loss = []
-    for epoch in range(10):
-        model.train()
-        for i, batch in enumerate(tqdm(train_dataloader)):
-            optimizer.zero_grad()
-            imgs = batch['image'] #.to(device)
-            masks = batch['mask'].to(device)
-            boxes = batch['box'] #.to(device)
-            inputs = processor(imgs, input_boxes=boxes, do_normalize = False, do_rescale = False, return_tensors="pt")
-            inputs = inputs.to(device)
-            outputs = model(**inputs, multimask_output=False)
-            medsam_seg_prob = torch.sigmoid(outputs.pred_masks.squeeze(1))
-            # convert soft mask to hard mask
-            medsam_seg_prob = F.interpolate(
-                medsam_seg_prob,
-                size=(240, 240),
-                mode="bilinear",
-                align_corners=False,
-            )
-
-            loss = loss_fn(medsam_seg_prob, masks)
-            loss.backward()
-            optimizer.step()
-            optimizer.zero_grad()
-            
-            train_loss.append(loss.item())
-            dice_score = dice_metric(medsam_seg_prob, masks)
-            jaccard_score = jaccard_metric(medsam_seg_prob, masks)
-
-            train_dice_score.append(dice_score.cpu().item())
-            train_jaccard_score.append(jaccard_score.cpu().item())
-
-            print(f"Loss after iteration {i}: {loss.item()}, Train Dice : {dice_score.item()}, Train Jaccard : {jaccard_score.item()}")
-        
-        print(f"Train: Loss after epoch {epoch}: {np.mean(train_loss)}, Dice : {np.mean(train_dice_score)}, Dice : {np.mean(train_jaccard_score)}")
-        
-        model.eval()
-        val_dice_score = []
-        val_jaccard_score = []
-        val_loss = []       
+        self.model.eval()
         with torch.no_grad():
-            for i, batch in enumerate(tqdm(val_dataloader)):
-                imgs = batch['image'] #.to(device)
-                masks = batch['mask'].to(device)
-                boxes = batch['box'] #.to(device)
-                inputs = processor(imgs, input_boxes=boxes, do_normalize = False, do_rescale = False, return_tensors="pt")
-                outputs = model(**inputs, multimask_output=False)
-                medsam_seg_prob = torch.sigmoid(outputs.pred_masks.squeeze(1))
-                # convert soft mask to hard mask
-                medsam_seg_prob = F.interpolate(
-                    medsam_seg_prob,
-                    size=(240, 240),
-                    mode="bilinear",
-                    align_corners=False,
-                )
+            for i, batch in enumerate(tqdm(eval_dataloader)):
+                outputs = model(**batch)
+                logits = outputs['low_res_masks']
+                masks = outputs['ground_truth_masks']
+                loss = loss_function(logits, masks)
+                outputs = {'logits' : logits, 'masks' : masks}
+                metrics = compute_metrics(outputs)
+                val_loss.append(loss.item())
+                dice_score.append(metrics['dice_metric'])
+                jaccard_score.append(metrics['jaccard_metric'])
+        
+        val_loss = np.mean(val_loss)
+        val_dice_score = np.mean(dice_score)
+        val_jaccard_score = np.mean(jaccard_score)
+        self.log({'val_loss' : val_loss, 'val_dice_score' : val_dice_score, 'val_jaccard_score' : val_jaccard_score})
+        print({'val_loss' : val_loss, 'val_dice_score' : val_dice_score, 'val_jaccard_score' : val_jaccard_score})
 
-                loss = loss_fn(medsam_seg_prob, masks)
+# Parse command-line arguments
+parser = argparse.ArgumentParser(description='Train MedSAM Lite model')
+parser.add_argument('--batch_size', type=int, default=8, help='Batch size for training')
+parser.add_argument('--learning_rate', type=float, default=0.0005, help='Learning rate for training')
+parser.add_argument('--rank', type=int, default=32, help='Rank for LoraConfig')
+parser.add_argument('--alpha', type=int, default=64, help='Alpha for LoraConfig')
+parser.add_argument('--dropout', type=float, default=0.1, help='Dropout for LoraConfig')
+parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs')
+parser.add_argument('--use_rlora', type=bool, default=True, help='Use RLORA in LoraConfig')
+parser.add_argument('--eval_steps', type=int, default=10, help='Number of steps to evaluate the model')
+parser.add_argument('--gradient_accumulation_steps', type=int, default=8, help='Number of gradient accumulation steps')
+args = parser.parse_args()
 
-                train_loss.append(loss.item())
-                dice_score = dice_metric(medsam_seg_prob, batch['mask'])
-                jaccard_score = jaccard_metric(medsam_seg_prob, batch['mask'])
+# Set environment variable for PJRT
+if torch.cuda.is_available():
+    if torch.version.cuda == '11.8':
+        os.environ["PJRT_DEVICE"] = "GPU" ## For CUDA 11.1
+    else:
+        os.environ["PJRT_DEVICE"] = "CUDA"
 
-                val_dice_score.append(dice_score.cpu().item())
-                val_jaccard_score.append(jaccard_score.cpu().item())
+# Set logging level to info
+logging.set_verbosity_info()
+logger = logging.get_logger("transformers")
 
-                print(f"Loss after iteration {i}: {loss.item()}, Val Dice : {dice_score.item()}, Val Jaccard : {jaccard_score.item()}")
+BATCH_SIZE = args.batch_size
+LEARNING_RATE = args.learning_rate
+RANK = args.rank
+ALPHA = args.alpha
+DROPOUT = args.dropout
+EPOCHS = args.epochs
+USE_RLORA = args.use_rlora
+EVAL_STEPS = args.eval_steps
+GRADIENT_ACCUMULATION_STEPS = args.gradient_accumulation_steps
 
-        print(f"Val: Loss after epoch {epoch}: {np.mean(train_loss)}, Val Dice : {np.mean(val_dice_score)}, Val Jaccard : {np.mean(val_jaccard_score)}")
+logger.info("Model Loading Intialized.")
 
+medsam_lite_image_encoder = TinyViT(
+    img_size=256,
+    in_chans=3,
+    embed_dims=[
+        64, ## (64, 256, 256)
+        128, ## (128, 128, 128)
+        160, ## (160, 64, 64)
+        320 ## (320, 64, 64) 
+    ],
+    depths=[2, 2, 6, 2],
+    num_heads=[2, 4, 5, 10],
+    window_sizes=[7, 7, 14, 7],
+    mlp_ratio=4.,
+    drop_rate=0.,
+    drop_path_rate=0.0,
+    use_checkpoint=False,
+    mbconv_expand_ratio=4.0,
+    local_conv_size=3,
+    layer_lr_decay=0.8
+)
 
-        torch.save(model.state_dict(), f'/mnt/disks/disk_dir/checkpoints/medsam_epoch_{epoch+1:03}.pth')
+medsam_lite_prompt_encoder = PromptEncoder(
+    embed_dim=256,
+    image_embedding_size=(64, 64),
+    input_image_size=(256, 256),
+    mask_in_chans=16
+)
+
+medsam_lite_mask_decoder = MaskDecoder(
+    num_multimask_outputs=3,
+        transformer=TwoWayTransformer(
+            depth=2,
+            embedding_dim=256,
+            mlp_dim=2048,
+            num_heads=8,
+        ),
+        transformer_dim=256,
+        iou_head_depth=3,
+        iou_head_hidden_dim=256,
+)
+
+model = MedSAM_Lite(
+    image_encoder = medsam_lite_image_encoder,
+    mask_decoder = medsam_lite_mask_decoder,
+    prompt_encoder = medsam_lite_prompt_encoder
+)
+
+lite_medsam_checkpoint_path = os.path.join(os.getcwd(), 'lite_medsam.pth')
+
+if torch.cuda.is_available():
+    device = 'cuda'
+else:
+    device = 'cpu'
+    
+lite_medsam_checkpoint = torch.load(lite_medsam_checkpoint_path, map_location=device)
+model.load_state_dict(lite_medsam_checkpoint)
+
+lora_config = LoraConfig(
+    r=RANK,
+    lora_alpha=ALPHA,
+    lora_dropout=DROPOUT,
+    bias="lora_only",
+    use_rslora=USE_RLORA,
+    target_modules=["qkv", "q_proj", "v_proj"], 
+)
+
+model = get_peft_model(model, lora_config)
+print_trainable_parameters(model)
+model.train()
+
+logger.info("Model Loading Successful.")
+logger.info("Data Loading Initialized.")
+
+train_dataset = npyDataset(folder='train')
+val_dataset = npyDataset(folder='val')
+
+logger.info("Data Loading Successful.")
+
+model_name = 'LiteMedSAM'
+
+training_args = TrainingArguments(
+    output_dir=f"{model_name}-lora_r{RANK}_a{ALPHA}_d{DROPOUT}",
+    learning_rate=LEARNING_RATE,
+    num_train_epochs=EPOCHS,
+    per_device_train_batch_size=BATCH_SIZE,
+    per_device_eval_batch_size=BATCH_SIZE,
+    save_total_limit=10,
+    evaluation_strategy="steps",
+    eval_steps = EVAL_STEPS,
+    save_strategy="epoch",
+    logging_steps=10,
+    push_to_hub=False,
+    lr_scheduler_type="cosine",
+    gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
+)   
+
+trainer = SegmentationTrainer(
+    model=model,
+    args=training_args,
+    train_dataset=train_dataset,
+    eval_dataset=val_dataset,
+    compute_metrics=compute_metrics,
+)
+
+trainer.train()
+
+logger.info("Training Completed.")

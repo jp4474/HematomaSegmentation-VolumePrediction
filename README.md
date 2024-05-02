@@ -1,35 +1,82 @@
 # HematomaSegmentation-VolumePrediction
 
-# Folder Structure and Description
+## File Description
+
+
+## Folder Structure 
+Folder structure for data
 ```bash
-.
-├── full_raw
-│   ├── training
-│   │   ├── mri
-│   │   ├── mask
-│   │   └── slice
-│   ├── validation
-│   │   ├── mri
-│   │   ├── mask
-│   │   └── slice
-│   └── test
-│       └── slice
-└── full_preprocessed
-    ├── training
-    │   ├── mri
-    │   ├── mask
-    │   └── slice
-    ├── validation
-    │   ├── mri
-    │   ├── mask
-    │   └── slice
-    └── test
-        ├── mri
-        ├── mask
-        └── slice
+└── data
+    ├── divide.sh
+    ├── img_test
+    ├── img_train
+    ├── img_train_pathes.txt // file names for img train
+    ├── img_val
+    ├── img_val_pathes.txt // file names for img val
+    ├── mask_test
+    ├── mask_train
+    ├── mask_train_pathes.txt // file names for mask train
+    ├── mask_val
+    ├── mask_val_pathes.txt // file names for mask val
+    ├── train_final_npy
+    │   ├── gts
+    │   └── imgs
+    ├── val_final_npy
+    │   ├── gts
+    │   └── imgs
+    └──train_final_npy
+        ├── gts
+        └── imgs
 ```
-- mri: This folder contains MRI (Magnetic Resonance Imaging) scans. Each file in this folder represents a brain MRI scan of an individual.
+## Preprocessing
+Run the pre-processing script to convert the dataset (nii.gz files and npy files) to npz format:
 
-- mask: This folder contains mask data. In the context of medical imaging, a mask is often a binary image that indicates the regions of interest in the corresponding MRI scan. Each file in this folder represents a mask that corresponds to an MRI scan with the same name without the subscript 'seg'.
+```bash
+python pre_CT_MR.py `
+    -img_path img_train `
+    -img_name_suffix .nii.gz `
+    -gt_path mask_train `
+    -gt_name_suffix .npy ` // expects npy extension but the script can be modified to take in .nii.gz
+    -output_path train_final_npz `
+    -num_workers 4 `
+    -modality CT ` // the script is only viable for CT modality. Modify the if-else statement in the script for other modalities 
+    -anatomy Brain ` 
+    -window_level 65 `
+    -window_width 70 `
+    --save_nii
+```
+Convert npz to npy
 
-- slice: This folder contains .npy files, which are NumPy array files. Each file in this folder is a stacked slice of an MRI scan and its corresponding mask. The MRI scan and mask are sliced into 155 slices along the transverse axis (the z-axis), and these slices are stacked together to form a 3D array of size [2, 240, 240]. This array is then saved as a .npy file. Each .npy file in this folder represents the sliced, stacked data of an MRI scan and its corresponding mask.
+```bash
+python npz_to_npy.py `
+    -npz_dir train_final_npz `
+    -npy_dir train_final_npy `
+    -num_workers 4
+
+```
+
+1. Run pre_CT_MR to preprocess CT scans
+2. Convert npz to npy using npz_to_npy
+3. Load the dataset using npyDataset Class in 'medsam_train_native.py'
+4. Start training by (on a single GPU)
+   ```bash
+    python medsam_train_native.py
+   ```
+
+## Acknowledgements
+- We thank the Columbia University's Biomedical Engineering Department, the teaching team of BMENE4460, and Columbia University Irving Medical Center for providing the dataset.
+  - Special Thanks to Dr. Jia Guo for advising our team.
+- We thank Meta AI and BoWangLab for making the source code publicly available.
+
+## References
+
+```bash
+@article{MedSAM,
+  title={Segment Anything in Medical Images},
+  author={Ma, Jun and He, Yuting and Li, Feifei and Han, Lin and You, Chenyu and Wang, Bo},
+  journal={Nature Communications},
+  volume={15},
+  pages={1--9},
+  year={2024}
+}
+```
