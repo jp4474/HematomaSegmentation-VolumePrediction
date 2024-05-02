@@ -60,7 +60,7 @@ python npz_to_npy.py `
 3. Load the dataset using npyDataset Class in 'medsam_train_native.py'
 4. Start training by (on a single GPU)
    ```bash
-    nohup python medsam_train_native.py > output.log &
+    python medsam_train_native.py
    ```
 
 ## Acknowledgements
