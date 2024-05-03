@@ -294,146 +294,147 @@ class SegmentationTrainer(Trainer):
         self.log({'val_loss' : val_loss, 'val_dice_score' : val_dice_score, 'val_jaccard_score' : val_jaccard_score})
         print({'val_loss' : val_loss, 'val_dice_score' : val_dice_score, 'val_jaccard_score' : val_jaccard_score})
 
-# Parse command-line arguments
-parser = argparse.ArgumentParser(description='Train MedSAM Lite model')
-parser.add_argument('--batch_size', type=int, default=8, help='Batch size for training')
-parser.add_argument('--learning_rate', type=float, default=0.0005, help='Learning rate for training')
-parser.add_argument('--rank', type=int, default=32, help='Rank for LoraConfig')
-parser.add_argument('--alpha', type=int, default=64, help='Alpha for LoraConfig')
-parser.add_argument('--dropout', type=float, default=0.1, help='Dropout for LoraConfig')
-parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs')
-parser.add_argument('--use_rlora', type=bool, default=True, help='Use RLORA in LoraConfig')
-parser.add_argument('--eval_steps', type=int, default=10, help='Number of steps to evaluate the model')
-parser.add_argument('--gradient_accumulation_steps', type=int, default=8, help='Number of gradient accumulation steps')
-args = parser.parse_args()
+if __name__ == "__main__":
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description='Train MedSAM Lite model')
+    parser.add_argument('--batch_size', type=int, default=8, help='Batch size for training')
+    parser.add_argument('--learning_rate', type=float, default=0.0005, help='Learning rate for training')
+    parser.add_argument('--rank', type=int, default=32, help='Rank for LoraConfig')
+    parser.add_argument('--alpha', type=int, default=64, help='Alpha for LoraConfig')
+    parser.add_argument('--dropout', type=float, default=0.1, help='Dropout for LoraConfig')
+    parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs')
+    parser.add_argument('--use_rlora', type=bool, default=True, help='Use RLORA in LoraConfig')
+    parser.add_argument('--eval_steps', type=int, default=10, help='Number of steps to evaluate the model')
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=8, help='Number of gradient accumulation steps')
+    args = parser.parse_args()
 
-# Set environment variable for PJRT
-if torch.cuda.is_available():
-    if torch.version.cuda == '11.8':
-        os.environ["PJRT_DEVICE"] = "GPU" ## For CUDA 11.1
+    # Set environment variable for PJRT
+    if torch.cuda.is_available():
+        if torch.version.cuda == '11.8':
+            os.environ["PJRT_DEVICE"] = "GPU" ## For CUDA 11.1
+        else:
+            os.environ["PJRT_DEVICE"] = "CUDA"
+
+    # Set logging level to info
+    logging.set_verbosity_info()
+    logger = logging.get_logger("transformers")
+
+    BATCH_SIZE = args.batch_size
+    LEARNING_RATE = args.learning_rate
+    RANK = args.rank
+    ALPHA = args.alpha
+    DROPOUT = args.dropout
+    EPOCHS = args.epochs
+    USE_RLORA = args.use_rlora
+    EVAL_STEPS = args.eval_steps
+    GRADIENT_ACCUMULATION_STEPS = args.gradient_accumulation_steps
+
+    logger.info("Model Loading Intialized.")
+
+    medsam_lite_image_encoder = TinyViT(
+        img_size=256,
+        in_chans=3,
+        embed_dims=[
+            64, ## (64, 256, 256)
+            128, ## (128, 128, 128)
+            160, ## (160, 64, 64)
+            320 ## (320, 64, 64) 
+        ],
+        depths=[2, 2, 6, 2],
+        num_heads=[2, 4, 5, 10],
+        window_sizes=[7, 7, 14, 7],
+        mlp_ratio=4.,
+        drop_rate=0.,
+        drop_path_rate=0.0,
+        use_checkpoint=False,
+        mbconv_expand_ratio=4.0,
+        local_conv_size=3,
+        layer_lr_decay=0.8
+    )
+
+    medsam_lite_prompt_encoder = PromptEncoder(
+        embed_dim=256,
+        image_embedding_size=(64, 64),
+        input_image_size=(256, 256),
+        mask_in_chans=16
+    )
+
+    medsam_lite_mask_decoder = MaskDecoder(
+        num_multimask_outputs=3,
+            transformer=TwoWayTransformer(
+                depth=2,
+                embedding_dim=256,
+                mlp_dim=2048,
+                num_heads=8,
+            ),
+            transformer_dim=256,
+            iou_head_depth=3,
+            iou_head_hidden_dim=256,
+    )
+
+    model = MedSAM_Lite(
+        image_encoder = medsam_lite_image_encoder,
+        mask_decoder = medsam_lite_mask_decoder,
+        prompt_encoder = medsam_lite_prompt_encoder
+    )
+
+    lite_medsam_checkpoint_path = os.path.join(os.getcwd(), 'lite_medsam.pth')
+
+    if torch.cuda.is_available():
+        device = 'cuda'
     else:
-        os.environ["PJRT_DEVICE"] = "CUDA"
+        device = 'cpu'
+        
+    lite_medsam_checkpoint = torch.load(lite_medsam_checkpoint_path, map_location=device)
+    model.load_state_dict(lite_medsam_checkpoint)
 
-# Set logging level to info
-logging.set_verbosity_info()
-logger = logging.get_logger("transformers")
+    lora_config = LoraConfig(
+        r=RANK,
+        lora_alpha=ALPHA,
+        lora_dropout=DROPOUT,
+        bias="lora_only",
+        use_rslora=USE_RLORA,
+        target_modules=["qkv", "q_proj", "v_proj"], 
+    )
 
-BATCH_SIZE = args.batch_size
-LEARNING_RATE = args.learning_rate
-RANK = args.rank
-ALPHA = args.alpha
-DROPOUT = args.dropout
-EPOCHS = args.epochs
-USE_RLORA = args.use_rlora
-EVAL_STEPS = args.eval_steps
-GRADIENT_ACCUMULATION_STEPS = args.gradient_accumulation_steps
+    model = get_peft_model(model, lora_config)
+    print_trainable_parameters(model)
+    model.train()
 
-logger.info("Model Loading Intialized.")
+    logger.info("Model Loading Successful.")
+    logger.info("Data Loading Initialized.")
 
-medsam_lite_image_encoder = TinyViT(
-    img_size=256,
-    in_chans=3,
-    embed_dims=[
-        64, ## (64, 256, 256)
-        128, ## (128, 128, 128)
-        160, ## (160, 64, 64)
-        320 ## (320, 64, 64) 
-    ],
-    depths=[2, 2, 6, 2],
-    num_heads=[2, 4, 5, 10],
-    window_sizes=[7, 7, 14, 7],
-    mlp_ratio=4.,
-    drop_rate=0.,
-    drop_path_rate=0.0,
-    use_checkpoint=False,
-    mbconv_expand_ratio=4.0,
-    local_conv_size=3,
-    layer_lr_decay=0.8
-)
+    train_dataset = npyDataset(folder='train')
+    val_dataset = npyDataset(folder='val')
 
-medsam_lite_prompt_encoder = PromptEncoder(
-    embed_dim=256,
-    image_embedding_size=(64, 64),
-    input_image_size=(256, 256),
-    mask_in_chans=16
-)
+    logger.info("Data Loading Successful.")
 
-medsam_lite_mask_decoder = MaskDecoder(
-    num_multimask_outputs=3,
-        transformer=TwoWayTransformer(
-            depth=2,
-            embedding_dim=256,
-            mlp_dim=2048,
-            num_heads=8,
-        ),
-        transformer_dim=256,
-        iou_head_depth=3,
-        iou_head_hidden_dim=256,
-)
+    model_name = 'LiteMedSAM'
 
-model = MedSAM_Lite(
-    image_encoder = medsam_lite_image_encoder,
-    mask_decoder = medsam_lite_mask_decoder,
-    prompt_encoder = medsam_lite_prompt_encoder
-)
+    training_args = TrainingArguments(
+        output_dir=f"{model_name}-lora_r{RANK}_a{ALPHA}_d{DROPOUT}",
+        learning_rate=LEARNING_RATE,
+        num_train_epochs=EPOCHS,
+        per_device_train_batch_size=BATCH_SIZE,
+        per_device_eval_batch_size=BATCH_SIZE,
+        save_total_limit=10,
+        evaluation_strategy="steps",
+        eval_steps = EVAL_STEPS,
+        save_strategy="epoch",
+        logging_steps=10,
+        push_to_hub=False,
+        lr_scheduler_type="cosine",
+        gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
+    )   
 
-lite_medsam_checkpoint_path = os.path.join(os.getcwd(), 'lite_medsam.pth')
+    trainer = SegmentationTrainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset,
+        eval_dataset=val_dataset,
+        compute_metrics=compute_metrics,
+    )
 
-if torch.cuda.is_available():
-    device = 'cuda'
-else:
-    device = 'cpu'
-    
-lite_medsam_checkpoint = torch.load(lite_medsam_checkpoint_path, map_location=device)
-model.load_state_dict(lite_medsam_checkpoint)
+    trainer.train()
 
-lora_config = LoraConfig(
-    r=RANK,
-    lora_alpha=ALPHA,
-    lora_dropout=DROPOUT,
-    bias="lora_only",
-    use_rslora=USE_RLORA,
-    target_modules=["qkv", "q_proj", "v_proj"], 
-)
-
-model = get_peft_model(model, lora_config)
-print_trainable_parameters(model)
-model.train()
-
-logger.info("Model Loading Successful.")
-logger.info("Data Loading Initialized.")
-
-train_dataset = npyDataset(folder='train')
-val_dataset = npyDataset(folder='val')
-
-logger.info("Data Loading Successful.")
-
-model_name = 'LiteMedSAM'
-
-training_args = TrainingArguments(
-    output_dir=f"{model_name}-lora_r{RANK}_a{ALPHA}_d{DROPOUT}",
-    learning_rate=LEARNING_RATE,
-    num_train_epochs=EPOCHS,
-    per_device_train_batch_size=BATCH_SIZE,
-    per_device_eval_batch_size=BATCH_SIZE,
-    save_total_limit=10,
-    evaluation_strategy="steps",
-    eval_steps = EVAL_STEPS,
-    save_strategy="epoch",
-    logging_steps=10,
-    push_to_hub=False,
-    lr_scheduler_type="cosine",
-    gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
-)   
-
-trainer = SegmentationTrainer(
-    model=model,
-    args=training_args,
-    train_dataset=train_dataset,
-    eval_dataset=val_dataset,
-    compute_metrics=compute_metrics,
-)
-
-trainer.train()
-
-logger.info("Training Completed.")
+    logger.info("Training Completed.")
