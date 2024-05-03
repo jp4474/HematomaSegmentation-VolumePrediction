@@ -54,11 +54,13 @@ python npz_to_npy.py `
     -num_workers 4
 
 ```
-
-1. Run pre_CT_MR to preprocess CT scans
-2. Convert npz to npy using npz_to_npy
-3. Load the dataset using npyDataset Class in 'medsam_train_native.py'
-4. Start training by (on a single GPU)
+1. Run `divide.sh` to split img_train_val_test folder data into img_train_val and img_test
+2. Use `split_train_val.py` to generate text files containing file names for img_train, mask_train, img_val, and mask_val
+3. Run `split.sh` to split the files based on the text files. i.e. train file should be in img_train. val file should be in img_val
+4. Run pre_CT_MR to preprocess CT scans
+5. Convert npz to npy using npz_to_npy
+6. Load the dataset using npyDataset Class in 'medsam_train_native.py'
+7. Start training by (on a single GPU)
    ```bash
     python medsam_train_native.py
    ```
