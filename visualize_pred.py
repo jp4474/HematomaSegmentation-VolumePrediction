@@ -8,11 +8,11 @@ import os
 from torchmetrics.classification import BinaryJaccardIndex, Dice
 from transformers import AutoConfig
 from peft import get_peft_model, load_peft_weights, set_peft_model_state_dict, PeftConfig
-from medsam_train_native import npyDataset
+from lora_train import npyDataset
 from segment_anything import sam_model_registry
 from tiny_vit_sam import TinyViT
 from segment_anything.modeling import MaskDecoder, PromptEncoder, TwoWayTransformer
-from medsam_train_native import MedSAM_Lite
+from lora_train import MedSAM_Lite
 from ResAttUNet.scripts.models import ResAttU_Net
 import cv2
 import matplotlib.pyplot as plt
@@ -324,13 +324,13 @@ if __name__ == "__main__":
         axs[0, 2].set_title(generate_title('ResAtt-UNet', resattunet_dice, resattunet_jaccard), fontsize=FONT_SIZE)
 
         axs[1, 0].imshow(litemedsam_pred[0].detach().numpy()[0], cmap='viridis')
-        axs[1, 0].set_title(generate_title('TinyMedSAM', litemedsam_dice, litemedsam_jaccard), fontsize=FONT_SIZE)
+        axs[1, 0].set_title(generate_title('LiteMedSAM', litemedsam_dice, litemedsam_jaccard), fontsize=FONT_SIZE)
 
         axs[1, 1].imshow(medsam_pred, cmap='viridis')
         axs[1, 1].set_title(generate_title('MedSAM', medsam_dice, medsam_jaccard), fontsize=FONT_SIZE)
 
         axs[1, 2].imshow(lora_pred[0].detach().numpy()[0], cmap='viridis')
-        axs[1, 2].set_title(generate_title('TinyMedSAM+LoRA', lora_dice, lora_jaccard), fontsize=FONT_SIZE)
+        axs[1, 2].set_title(generate_title('LiteMedSAM+LoRA', lora_dice, lora_jaccard), fontsize=FONT_SIZE)
 
         # Remove the x and y ticks
         for ax in axs.flat:
