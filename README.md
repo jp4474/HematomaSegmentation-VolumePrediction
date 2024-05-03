@@ -57,7 +57,7 @@ python npz_to_npy.py `
 7. Load the dataset using npyDataset Class in 'medsam_train_native.py'
 8. Start training by (on a single GPU)
    ```bash
-    python medsam_train_native.py
+    python lora_train.py
    ```
 
 ## Acknowledgements
