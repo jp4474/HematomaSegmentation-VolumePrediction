@@ -295,12 +295,13 @@ if __name__ == "__main__":
         jaccard = BinaryJaccardIndex()
 
         # print(mask_512.shape, resattunet_pred.shape)
-        resattunet_dice = dice(resattunet_pred, mask_512[0].int()).item()
-        medsam_dice = dice(torch.from_numpy(medsam_pred), mask_512.int()).item()
+        resattunet_dice = dice(resattunet_pred, mask_512.int()).item()
+        #medsam_dice = dice(torch.from_numpy(medsam_pred), mask_512[0][0].int()).item()
+        medsam_dice = dice_coeff_binary(torch.from_numpy(medsam_pred), mask_512[0][0].int()).item()
         litemedsam_dice = dice(litemedsam_pred, mask_256.int()).item()
         lora_dice = dice(lora_pred, mask_256.int()).item()
 
-        resattunet_jaccard = jaccard(resattunet_pred, mask_512.int()).item()
+        resattunet_jaccard = jaccard(resattunet_pred[0], mask_512[0].int()).item()
         medsam_jaccard = jaccard(torch.from_numpy(medsam_pred), mask_512[0][0].int()).item()
         litemedsam_jaccard = jaccard(litemedsam_pred, mask_256.int()).item()
         lora_jaccard = jaccard(lora_pred, mask_256.int()).item()
@@ -308,30 +309,36 @@ if __name__ == "__main__":
         # Create a 2x3 grid for plotting
         fig, axs = plt.subplots(2, 3, figsize=(15, 10))
 
-        # Plot the original image
+        FONT_SIZE = 20
+
+       # Plot the original image
         axs[0, 0].imshow(img_512[0].numpy().transpose(1, 2, 0))
-        axs[0, 0].set_title('Original Image')
+        axs[0, 0].set_title('Original Image', fontsize=FONT_SIZE)
 
         # Plot the original mask
         axs[0, 1].imshow(mask_256[0][0].numpy(), cmap='viridis')
-        axs[0, 1].set_title('Original Mask')
+        axs[0, 1].set_title('Original Mask', fontsize=FONT_SIZE)
 
         # Plot the predictions
         axs[0, 2].imshow(resattunet_pred[0][0], cmap='viridis')
-        axs[0, 2].set_title(generate_title('ResAtt-UNet', resattunet_dice, resattunet_jaccard))
+        axs[0, 2].set_title(generate_title('ResAtt-UNet', resattunet_dice, resattunet_jaccard), fontsize=FONT_SIZE)
 
         axs[1, 0].imshow(litemedsam_pred[0].detach().numpy()[0], cmap='viridis')
-        axs[1, 0].set_title(generate_title('TinyMedSAM', litemedsam_dice, litemedsam_jaccard))
+        axs[1, 0].set_title(generate_title('TinyMedSAM', litemedsam_dice, litemedsam_jaccard), fontsize=FONT_SIZE)
 
         axs[1, 1].imshow(medsam_pred, cmap='viridis')
-        axs[1, 1].set_title(generate_title('MedSAM', medsam_dice, medsam_jaccard))
+        axs[1, 1].set_title(generate_title('MedSAM', medsam_dice, medsam_jaccard), fontsize=FONT_SIZE)
 
         axs[1, 2].imshow(lora_pred[0].detach().numpy()[0], cmap='viridis')
-        axs[1, 2].set_title(generate_title('TinyMedSAM+LoRA', lora_dice, lora_jaccard))
+        axs[1, 2].set_title(generate_title('TinyMedSAM+LoRA', lora_dice, lora_jaccard), fontsize=FONT_SIZE)
 
         # Remove the x and y ticks
         for ax in axs.flat:
             ax.axis('off')
-
+        
+        fig.tight_layout()
+        plt.subplots_adjust(wspace=0, hspace=0.16)
+        # Save the plot
+        plt.savefig(f'figs/Test_Sample_{i}.png')
         # Display the plot
-        plt.show()
+        # plt.show()
