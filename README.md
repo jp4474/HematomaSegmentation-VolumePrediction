@@ -34,31 +34,40 @@ Folder structure for data
 3. Run `split.sh` to split the files based on the text files. i.e. train file should be in img_train. val file should be in img_val
 4. Run pre_CT_MR to preprocess CT scans
 ```bash
-python pre_CT_MR.py `
-    -img_path img_train `
-    -img_name_suffix .nii.gz `
-    -gt_path mask_train `
-    -gt_name_suffix .npy ` // expects npy extension but the script can be modified to take in .nii.gz
-    -output_path train_final_npz `
-    -num_workers 4 `
-    -modality CT ` // the script is only viable for CT modality. Modify the if-else statement in the script for other modalities 
-    -anatomy Brain ` 
-    -window_level 65 `
-    -window_width 70 `
-    --save_nii
+  python pre_CT_MR.py `
+  -img_path img_train `
+  -img_name_suffix .nii.gz `
+  -gt_path mask_train `
+  -gt_name_suffix .npy ` // expects npy extension but the script can be modified to take in .nii.gz
+  -output_path train_final_npz `
+  -num_workers 4 `
+  -modality CT ` // the script is only viable for CT modality. Modify the if-else statement in the script for other modalities 
+  -anatomy Brain ` 
+  -window_level 65 `
+  -window_width 70 `
+  --save_nii
 ```
 6. Convert npz to npy using npz_to_npy
 ```bash
-python npz_to_npy.py `
-    -npz_dir train_final_npz `
-    -npy_dir train_final_npy `
-    -num_workers 4
+  python npz_to_npy.py `
+  -npz_dir train_final_npz `
+  -npy_dir train_final_npy `
+  -num_workers 4
 ```
 7. Load the dataset using npyDataset Class in 'medsam_train_native.py'
 8. Start training by (on a single GPU)
-   ```bash
-    python lora_train.py
-   ```
+```bash
+  python lora_train.py \
+  --batch_size 8 \
+  --learning_rate 0.0005 \
+  --rank 32 \
+  --alpha 64 \
+  --dropout 0.1 \
+  --epochs 10 \
+  --use_rlora True \
+  --eval_steps 10 \
+  --gradient_accumulation_steps 8
+```
 
 ## Acknowledgements
 - We thank the Columbia University's Biomedical Engineering Department, the teaching team of BMENE4460, and Columbia University Irving Medical Center for providing the dataset.
