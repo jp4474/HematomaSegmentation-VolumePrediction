@@ -13,7 +13,7 @@ data <br />
     `npz_to_npy.py`: script to convert .npz files outputed by `pre_CT_MR.py` to .npy files <br />
 <br />
 segment anything <br />
-    folder contains MedSAM model <br />
+    - folder contains MedSAM model <br />
 <br />
 `lite_medsam.pth`: weights of not fine-tuned LiteMedSAM model (weights of fine-tuned model are available upon request) <br />
 `lora_train.py`: script for fine-tuning LiteMedSAM with LoRA <br />
