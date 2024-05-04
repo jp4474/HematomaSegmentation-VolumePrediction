@@ -2,6 +2,10 @@
 
 ## File Description
 
+EDA
+`ICH_dataset.ipynb`: ICH dataset exploration and visualization
+
+
 
 ## Folder Structure 
 Folder structure for data
