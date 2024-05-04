@@ -8,6 +8,10 @@ Folder structure for data
 ```bash
 └── data
     ├── divide.sh
+    ├── npz_to_npy.py
+    ├── pre_CT_MR.py
+    ├── split_train_val.py
+    ├── split.sh
     ├── img_test
     ├── img_train
     ├── img_train_pathes.txt // file names for img train
@@ -24,7 +28,7 @@ Folder structure for data
     ├── val_final_npy
     │   ├── gts
     │   └── imgs
-    └──train_final_npy
+    └── train_final_npy
         ├── gts
         └── imgs
 ```
