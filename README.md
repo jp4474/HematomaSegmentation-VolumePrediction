@@ -2,17 +2,17 @@
 
 ## File Description
 
-EDA <br />
+EDA folder <br />
     `ICH_dataset.ipynb`: ICH dataset exploration and visualization <br />
 <br />
-data <br />
+data folder <br />
     `divide.sh`: script to move test images from img_train_val_test folder to img_test folder <br />
     `split_train_val.py`: script to split the training data into training set and validation set with 0.9/0.1 ratio (creates .txt files with scans ids) <br />
     `split.sh`: script to move train (val) images/masks from img_train_val/mask_train_val folder to img_train/mask_train (img_val/mask_val) folder <br />
     `pre_CT_MR.py`: script to preprocess data <br />
     `npz_to_npy.py`: script to convert .npz files outputed by `pre_CT_MR.py` to .npy files <br />
 <br />
-segment anything <br />
+segment anything folder <br />
     - folder contains MedSAM model <br />
 <br />
 `lite_medsam.pth`: weights of not fine-tuned LiteMedSAM model (weights of fine-tuned model are available upon request) <br />
