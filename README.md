@@ -76,7 +76,7 @@ Folder structure for data
   -npy_dir train_final_npy `
   -num_workers 4
 ```
-7. Load the dataset using npyDataset Class in 'medsam_train_native.py'
+7. Load the dataset using npyDataset Class in 'lora_train.py'
 8. Start training by (on a single GPU)
 ```bash
   python lora_train.py \
